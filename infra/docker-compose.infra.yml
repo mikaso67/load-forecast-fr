@@ -1,0 +1,68 @@
+name: load-forecast-fr-infra
+
+services:
+  postgres:
+    image: postgres:16.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-load_forecast}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in the root .env file}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}
+    command: ["postgres", "-c", "timezone=UTC"]
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  mlflow:
+    build:
+      context: ./mlflow
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: mlflow
+      PGUSER: ${POSTGRES_USER:?Set POSTGRES_USER in the root .env file}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}
+      PGOPTIONS: "-c timezone=UTC"
+    command:
+      - mlflow
+      - server
+      # libpq reads PG* variables, keeping credentials out of the URI and logs.
+      - --backend-store-uri
+      - postgresql+psycopg://
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+      - --serve-artifacts
+      - --artifacts-destination
+      - /mlartifacts
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - mlflow_artifacts:/mlartifacts
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5).close()"
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+
+volumes:
+  postgres_data:
+  mlflow_artifacts:

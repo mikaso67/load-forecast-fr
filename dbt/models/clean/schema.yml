@@ -1,0 +1,40 @@
+version: 2
+
+models:
+  - name: load_30min
+    description: "Clean French national electricity consumption and RTE forecasts at 30-minute resolution"
+    columns:
+      - name: value_time
+        description: "Observation UTC timestamp with timezone"
+        tests:
+          - unique
+          - not_null
+      - name: source_dataset
+        description: "Chosen source dataset following precedence rule"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 'eco2mix-national-cons-def'
+                  - 'eco2mix-national-tr'
+      - name: prevision_j1
+        description: "RTE Day-Ahead (D-1) consumption forecast in MW"
+        tests:
+          - not_null
+      - name: prevision_j
+        description: "RTE Day-of (D) consumption forecast in MW"
+        tests:
+          - not_null
+      - name: consommation
+        description: "Observed national power consumption in MW"
+        tests:
+          - not_null:
+              name: not_null_load_30min_consommation_cons_def
+              config:
+                where: "source_dataset = 'eco2mix-national-cons-def'"
+          - not_null:
+              name: not_null_load_30min_consommation_tr
+              config:
+                where: "source_dataset = 'eco2mix-national-tr'"
+                severity: warn

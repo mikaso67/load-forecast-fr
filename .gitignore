@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Environments and secrets
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Data and artifacts (never in git)
+data/
+*.parquet
+*.feather
+*.pkl
+*.joblib
+/models/
+*.bin
+*.log
+mlflow.db
+*.sqlite
+*.dump
+*.grib2
+*.nc
+*.zip
+*.h5
+*.onnx
+*.pt
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+mlruns/
+mlartifacts/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
+logs/
+
+# Editors and OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store

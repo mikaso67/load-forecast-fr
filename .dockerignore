@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+data
+models
+mlruns
+mlartifacts
+.venv
+venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+dbt/target
+dbt/logs

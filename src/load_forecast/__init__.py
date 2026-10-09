@@ -1,0 +1,1 @@
+"""French national load forecasting."""

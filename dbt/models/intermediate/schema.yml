@@ -1,0 +1,35 @@
+version: 2
+
+models:
+  - name: int_load_30min_filtered
+    description: "Intermediate 30-minute eCO2mix records filtered by resolution, date range, and Protocol D12"
+    columns:
+      - name: value_time
+        description: "Observation UTC timestamp with timezone"
+        tests:
+          - not_null
+      - name: source_dataset
+        description: "Source dataset identifier"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 'eco2mix-national-cons-def'
+                  - 'eco2mix-national-tr'
+      - name: prevision_j1
+        description: "RTE Day-Ahead (D-1) consumption forecast in MW"
+        tests:
+          - not_null
+      - name: prevision_j
+        description: "RTE Day-of (D) consumption forecast in MW"
+        tests:
+          - not_null
+      - name: consommation
+        description: "Observed power consumption in MW"
+      - name: original_values
+        description: "Original JSONB payload from ODRE"
+      - name: ingested_at
+        description: "Ingestion UTC timestamp with timezone"
+        tests:
+          - not_null

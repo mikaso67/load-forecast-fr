@@ -1,0 +1,16 @@
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/test_cutoff.py" = ["UP017", "B905"]
+
+[tool.pytest.ini_options]
+minversion = "9.1"
+addopts = "--strict-config --strict-markers --import-mode=importlib"
+pythonpath = ["src"]
+testpaths = ["tests"]

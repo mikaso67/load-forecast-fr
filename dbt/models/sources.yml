@@ -1,0 +1,25 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: eco2mix
+        description: "Append-only raw eCO2mix ingestion from ODRE"
+        columns:
+          - name: source_dataset
+            description: "Source dataset identifier ('eco2mix-national-cons-def' or 'eco2mix-national-tr')"
+          - name: value_time
+            description: "Observation UTC timestamp with timezone"
+          - name: payload_hash
+            description: "SHA-256 digest of original JSON payload"
+          - name: original_values
+            description: "Original JSONB payload from ODRE"
+          - name: consommation
+            description: "Observed power consumption in MW"
+          - name: prevision_j1
+            description: "RTE Day-Ahead (D-1) consumption forecast in MW"
+          - name: prevision_j
+            description: "RTE Day-of (D) consumption forecast in MW"
+          - name: ingested_at
+            description: "Ingestion UTC timestamp with timezone"
