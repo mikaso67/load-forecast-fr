@@ -17,6 +17,7 @@
   const RTE_REPLAY_BAR = "#dfe3e9";
   const TEXT_COLOR = "#d6dbe3";
   const FONT = '"IBM Plex Sans", system-ui, sans-serif';
+  const PROVISIONAL_NOTE = "Real-time actuals run about 1 GW below the consolidated figures my model targets; provisional errors include that gap and are replaced when RTE publishes consolidated data.";
 
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -99,6 +100,40 @@
 
   function isRealtime(vintage) {
     return vintage === "realtime" || vintage === "real-time";
+  }
+
+  function isFinal(vintage) {
+    return vintage === "consolidated" || vintage === "definitive";
+  }
+
+  function provisionalDays(items, dateOf) {
+    return new Set(items.filter(d => isRealtime(d.actual_vintage)).map(dateOf)).size;
+  }
+
+  function actualsMarkArea(records, dateKey) {
+    const replay = createReplayMarkArea(getReplayIntervals(records, dateKey));
+    const provisional = [];
+    let start = null;
+    let previous = null;
+    records.forEach(r => {
+      if (isRealtime(r.actual_vintage)) {
+        if (start === null) start = r[dateKey];
+      } else if (start !== null) {
+        provisional.push([start, previous]);
+        start = null;
+      }
+      previous = r[dateKey];
+    });
+    if (start !== null) provisional.push([start, previous]);
+    return {
+      silent: true,
+      data: (replay ? replay.data : []).concat(provisional.map(pair => [
+        { xAxis: pair[0], itemStyle: { color: "rgba(91, 141, 239, 0.08)" },
+          label: { show: true, position: "insideBottomLeft", formatter: "provisional",
+            color: TEXT_COLOR, fontSize: 10 } },
+        { xAxis: pair[1] },
+      ])),
+    };
   }
 
   function getReplayIntervals(records, dateKey) {
@@ -406,14 +441,22 @@
     const chart = echarts.init(el);
     const isMobile = isMobileEl(el);
     const times = recentSlots.map(s => s.time);
-    const markArea = createReplayMarkArea(getReplayIntervals(recentSlots, "time"));
+    const markArea = actualsMarkArea(recentSlots, "time");
 
-    const mae = maeOver(recentSlots);
+    const finalSlots = recentSlots.filter(s => isFinal(s.actual_vintage));
+    const finalDays = new Set(finalSlots.map(s => s.date)).size;
+    const pendingDays = provisionalDays(recentSlots, s => s.date);
+    const mae = maeOver(finalSlots);
     if (mae) {
       const verdict = mae.model < mae.rte ? "below" : mae.model > mae.rte ? "above" : "equal to";
       setText("title-recent7d",
-        `Over the last 7 days my error was ${verdict} RTE's: ${fmt(mae.model)} MW against ${fmt(mae.rte)} MW`);
+        `On ${finalDays} consolidated days in the last 7 days, my error was ${verdict} RTE's: ${fmt(mae.model)} MW against ${fmt(mae.rte)} MW`);
+    } else {
+      setText("title-recent7d", "Last 7 days: awaiting consolidated actuals");
     }
+    setText("finding-recent7d", `${pendingDays} provisional days. ${PROVISIONAL_NOTE}`);
+    const recentGuide = el.parentElement.querySelector(".how-to-read");
+    if (recentGuide) recentGuide.textContent = "How to read: the white line shows actual consumption. Shaded areas labelled provisional use real-time actuals; the title compares consolidated days only. The slider zooms in on the week.";
 
     chart.setOption(baseOption({
       tooltip: {
@@ -422,6 +465,7 @@
           if (!params || params.length === 0) return "";
           const s = recentSlots[params[0].dataIndex];
           let out = `<div style="font-weight: 600; margin-bottom: 4px;">${s.time}</div>`;
+          if (isRealtime(s.actual_vintage)) out += "<div>Real-time actuals (provisional)</div>";
           if (s.is_replay) {
             out += `<div style="color: ${REPLAY_LABEL_COLOR}; font-weight: 600; font-size: 11px;">[REPLAY DATA]</div>`;
           }
@@ -512,12 +556,21 @@
     const chart = echarts.init(el);
     const isMobile = isMobileEl(el);
     const dates = items.map(d => d.date.slice(5));
-    const modelData = items.map(d => ({ value: d.model_mae, is_replay: d.is_replay, date: d.date }));
-    const rteData = items.map(d => ({ value: d.rte_mae, is_replay: d.is_replay, date: d.date }));
+    function barData(d, value) {
+      return { value, is_replay: d.is_replay, date: d.date,
+        itemStyle: { decal: isRealtime(d.actual_vintage) ? {
+          symbol: "rect", dashArrayX: [1, 0], dashArrayY: [2, 4],
+          rotation: Math.PI / 4, color: "rgba(15, 18, 23, 0.6)",
+        } : null } };
+    }
+    const modelData = items.map(d => barData(d, d.model_mae));
+    const rteData = items.map(d => barData(d, d.rte_mae));
 
-    const scored = items.filter(d => d.model_mae !== null && d.rte_mae !== null);
+    const scored = items.filter(d => isFinal(d.actual_vintage) && d.model_mae !== null && d.rte_mae !== null);
     const better = scored.filter(d => d.model_mae < d.rte_mae).length;
-    setText("title-daily-mae", `Below RTE on ${better} of the last ${scored.length} days`);
+    setText("title-daily-mae", scored.length
+      ? `Below RTE on ${better} of ${scored.length} consolidated days in the last 28 days`
+      : "Daily errors: awaiting consolidated actuals");
 
     const vintage = vintageSwitch(items, d => d.date, vintageSwitchDate);
     const markerX = vintage.marker ? vintage.marker.slice(5) : null;
@@ -525,7 +578,10 @@
     const notes = [];
     if (items.some(d => d.is_replay)) notes.push("Lighter bars are replay days.");
     if (vintage.beforeFirst) notes.push("All days on real-time actuals (provisional).");
+    notes.push(`${provisionalDays(items, d => d.date)} provisional days, shown with hatched bars. Comparisons use consolidated or definitive actuals only.`);
     setText("daily-mae-desc", notes.join(" "));
+    const dailyGuide = el.parentElement.querySelector(".how-to-read");
+    if (dailyGuide) dailyGuide.textContent = "How to read: each pair of bars shows the recorded daily MAE. Hatched bars are provisional and excluded from the comparison in the title.";
 
     chart.setOption(baseOption({
       tooltip: {
@@ -535,6 +591,7 @@
           if (!params || params.length === 0) return "";
           const d = items[params[0].dataIndex];
           let out = `<div style="font-weight: 600; margin-bottom: 4px;">${d.date}</div>`;
+          out += `<div>Actuals: ${isRealtime(d.actual_vintage) ? "real-time (provisional)" : d.actual_vintage}</div>`;
           if (d.is_replay) {
             out += `<div style="color: ${REPLAY_LABEL_COLOR}; font-weight: 600; font-size: 11px;">[REPLAY DATA]</div>`;
           }
@@ -544,7 +601,13 @@
           if (d.rte_mae !== null) {
             out += `<div><span style="color:${RTE_COLOR}; font-weight: 600;">RTE D-1 MAE:</span> ${fmt(d.rte_mae)} MW</div>`;
           }
-          if (d.model_mae !== null && d.rte_mae !== null) {
+          if (d.model_mean_error !== null && d.model_mean_error !== undefined) {
+            out += `<div>Model bias (forecast minus actual): ${fmt(d.model_mean_error)} MW</div>`;
+          }
+          if (d.rte_mean_error !== null && d.rte_mean_error !== undefined) {
+            out += `<div>RTE bias (forecast minus actual): ${fmt(d.rte_mean_error)} MW</div>`;
+          }
+          if (isFinal(d.actual_vintage) && d.model_mae !== null && d.rte_mae !== null) {
             const gap = d.model_mae - d.rte_mae;
             const pct = d.rte_mae > 0 ? ((d.rte_mae - d.model_mae) / d.rte_mae) * 100 : 0;
             const color = gap <= 0 ? "#5fd08b" : "#ff8a80";
@@ -605,14 +668,18 @@
     const last = history[history.length - 1];
     if (last.model_rolling_mae !== null && last.rte_rolling_mae !== null) {
       setText("title-rolling-mae",
-        `On ${shortDate(last.date)}, the 28-day error was ${fmt(last.model_rolling_mae)} MW for my model and ${fmt(last.rte_rolling_mae)} MW for RTE`);
+        `On ${shortDate(last.date)}, error over ${last.comparison_days} consolidated days was ${fmt(last.model_rolling_mae)} MW for my model and ${fmt(last.rte_rolling_mae)} MW for RTE`);
+    } else {
+      setText("title-rolling-mae", "28-day comparison: awaiting consolidated actuals");
     }
 
     const vintage = vintageSwitch(history, r => r.date, vintageSwitchDate);
     const notes = [];
     if (history.some(r => r.is_replay)) notes.push("The shaded part is replay.");
-    if (vintage.beforeFirst) notes.push("All days on real-time actuals (provisional).");
+    notes.push("Each 28-day window includes consolidated or definitive days only. Provisional errors remain in the daily bars and consumption curves.");
     setText("rolling-mae-desc", notes.join(" "));
+    const rollingGuide = el.parentElement.querySelector(".how-to-read");
+    if (rollingGuide) rollingGuide.textContent = "How to read: each point averages only consolidated or definitive daily errors in the previous 28 calendar days. A gap means no eligible days; provisional days do not enter either line.";
 
     chart.setOption(baseOption({
       tooltip: {
@@ -621,6 +688,7 @@
           if (!params || params.length === 0) return "";
           const r = history[params[0].dataIndex];
           let out = `<div style="font-weight: 600; margin-bottom: 4px;">${r.date}</div>`;
+          out += `<div>${r.comparison_days} consolidated or definitive days in the 28-day window</div>`;
           if (r.is_replay) {
             out += `<div style="color: ${REPLAY_LABEL_COLOR}; font-weight: 600; font-size: 11px;">[REPLAY DATA]</div>`;
           }
@@ -819,6 +887,16 @@
     }
 
     const mae = tiles.rolling_28d_mae;
+    show("tile-mae-provisional", false);
+    show("tile-beating-provisional", false);
+    if (mae && mae.status === "awaiting_consolidated") {
+      ["tile-mae-val", "tile-beating-val"].forEach(id => {
+        setText(id, "awaiting consolidated actuals");
+        document.getElementById(id).style.fontSize = "1rem";
+      });
+      setText("tile-mae-sub", `${mae.provisional_days} provisional days in the 28-day window`);
+      setText("tile-beating-sub", `${mae.provisional_days} provisional days excluded`);
+    }
     if (mae && mae.model_mw !== null) {
       let gain = mae.relative_gain_pct;
       if (gain === undefined || gain === null) {
@@ -827,15 +905,13 @@
       setText("tile-mae-val", `${fmt(mae.model_mw)} vs ${fmt(mae.rte_mw)} MW`);
       const diff = mae.gap_mw <= 0 ? `${fmt(mae.gap_mw)} MW` : `+${fmt(mae.gap_mw)} MW`;
       const gainText = gain >= 0 ? `+${gain.toFixed(1)}%` : `${gain.toFixed(1)}%`;
-      setText("tile-mae-sub", `Difference ${diff}, ${gainText} relative gain`);
-      show("tile-mae-provisional", Boolean(mae.is_provisional));
+      setText("tile-mae-sub", `${mae.total_days} consolidated days, ${mae.provisional_days} provisional days excluded. Difference ${diff}, ${gainText} relative gain`);
     }
 
     const beating = tiles.beating_rte;
     if (beating && beating.pct !== null) {
       setText("tile-beating-val", `${beating.pct}%`);
-      setText("tile-beating-sub", `${beating.better_days} of ${beating.total_days} days`);
-      show("tile-beating-provisional", Boolean(beating.is_provisional));
+      setText("tile-beating-sub", `${beating.better_days} of ${beating.total_days} consolidated days, ${beating.provisional_days} provisional days excluded`);
     }
 
     const counts = tiles.delivery_counts;
