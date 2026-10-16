@@ -17,7 +17,7 @@
   const RTE_REPLAY_BAR = "#dfe3e9";
   const TEXT_COLOR = "#d6dbe3";
   const FONT = '"IBM Plex Sans", system-ui, sans-serif';
-  const PROVISIONAL_NOTE = "Real-time actuals run about 1 GW below the consolidated figures my model targets; provisional errors include that gap and are replaced when RTE publishes consolidated data.";
+  const PROVISIONAL_NOTE = "I compare shadow variant A with real-time actuals (provisional), then switch to served variant B when consolidated actuals arrive; the dotted line shows B on its consolidated target scale, with no offset applied.";
 
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -441,22 +441,25 @@
     const chart = echarts.init(el);
     const isMobile = isMobileEl(el);
     const times = recentSlots.map(s => s.time);
+    const hasShadow = recentSlots.some(s => s.comparison_variant === "A");
+    const hasFinal = recentSlots.some(s => isFinal(s.actual_vintage));
+    const mainName = hasShadow ? "My forecast (real-time scale)" : "My forecast (consolidated scale)";
     const markArea = actualsMarkArea(recentSlots, "time");
 
-    const finalSlots = recentSlots.filter(s => isFinal(s.actual_vintage));
-    const finalDays = new Set(finalSlots.map(s => s.date)).size;
+    const comparisonSlots = recentSlots.filter(s => (isFinal(s.actual_vintage) || s.comparison_variant === "A") && s.actual_mw !== null && s.forecast_mw !== null && s.rte_mw !== null);
+    const comparisonDays = new Set(comparisonSlots.map(s => s.date)).size;
     const pendingDays = provisionalDays(recentSlots, s => s.date);
-    const mae = maeOver(finalSlots);
+    const mae = maeOver(comparisonSlots);
     if (mae) {
       const verdict = mae.model < mae.rte ? "below" : mae.model > mae.rte ? "above" : "equal to";
       setText("title-recent7d",
-        `On ${finalDays} consolidated days in the last 7 days, my error was ${verdict} RTE's: ${fmt(mae.model)} MW against ${fmt(mae.rte)} MW`);
+        `On ${comparisonDays} days in the last 7 days${pendingDays ? " (provisional)" : " (final)"}, my error was ${verdict} RTE's: ${fmt(mae.model)} MW against ${fmt(mae.rte)} MW`);
     } else {
       setText("title-recent7d", "Last 7 days: awaiting consolidated actuals");
     }
     setText("finding-recent7d", `${pendingDays} provisional days. ${PROVISIONAL_NOTE}`);
     const recentGuide = el.parentElement.querySelector(".how-to-read");
-    if (recentGuide) recentGuide.textContent = "How to read: the white line shows actual consumption. Shaded areas labelled provisional use real-time actuals; the title compares consolidated days only. The slider zooms in on the week.";
+    if (recentGuide) recentGuide.textContent = "How to read: the white line shows actual consumption. Shaded areas labelled provisional compare A with real-time actuals; final days compare B with consolidated actuals. The slider zooms in on the week.";
 
     chart.setOption(baseOption({
       tooltip: {
@@ -473,13 +476,14 @@
             out += `<div><span style="color:${ACTUAL_COLOR}; font-weight: 600;">Actual:</span> ${fmt(s.actual_mw)} MW</div>`;
           }
           if (s.forecast_mw !== null) {
-            out += `<div><span style="color:${ACCENT_COLOR}; font-weight: 600;">Model:</span> ${fmt(s.forecast_mw)} MW`;
+            out += `<div><span style="color:${ACCENT_COLOR}; font-weight: 600;">${s.comparison_variant === "A" ? "Shadow A (provisional)" : "Served B (final)"}:</span> ${fmt(s.forecast_mw)} MW`;
             if (s.actual_mw !== null) {
               const diff = s.forecast_mw - s.actual_mw;
               out += ` (${diff > 0 ? "+" : ""}${fmt(diff)} MW)`;
             }
             out += `</div>`;
           }
+          if (s.comparison_variant === "A" && s.served_forecast_mw !== null) out += `<div>Served B (targets consolidated): ${fmt(s.served_forecast_mw)} MW</div>`;
           if (s.rte_mw !== null) {
             out += `<div><span style="color:${RTE_COLOR}; font-weight: 600;">RTE D-1:</span> ${fmt(s.rte_mw)} MW`;
             if (s.actual_mw !== null) {
@@ -491,12 +495,14 @@
           return out;
         },
       },
-      legend: { data: ["Actual", "Model Forecast", "RTE D-1"], top: 0, textStyle: { fontSize: 12 } },
+      legend: { data: ["Actual", mainName, ...(hasShadow && hasFinal ? ["My forecast (consolidated scale)"] : []), ...(hasShadow ? ["Served forecast (targets consolidated)"] : []), "RTE D-1"], top: 0,
+        formatter: name => isMobile ? name.replace(" (", "\n(") : name,
+        textStyle: { fontSize: isMobile ? 10 : 12 }, itemGap: 8 },
       dataZoom: [
         { type: "slider", start: 57, end: 100, bottom: 6, height: 24, borderColor: "#2f3742", backgroundColor: "rgba(255, 255, 255, 0.03)", fillerColor: "rgba(91, 141, 239, 0.22)", dataBackground: { lineStyle: { color: "#4b5563" }, areaStyle: { color: "rgba(255, 255, 255, 0.06)" } }, selectedDataBackground: { lineStyle: { color: ACCENT_COLOR }, areaStyle: { color: "rgba(91, 141, 239, 0.25)" } }, handleStyle: { color: "#d6dbe3", borderColor: "#2f3742" }, moveHandleStyle: { color: "#4b5563" }, textStyle: { color: "#9aa3af", fontSize: 11 } },
         { type: "inside", start: 57, end: 100 },
       ],
-      grid: { left: "3%", right: "3%", bottom: "16%", top: isMobile ? 76 : "14%", containLabel: true },
+      grid: { left: "3%", right: "3%", bottom: "16%", top: isMobile ? 112 : "20%", containLabel: true },
       xAxis: {
         type: "category",
         data: times,
@@ -524,14 +530,32 @@
           z: 3,
         },
         {
-          name: "Model Forecast",
+          name: mainName,
           type: "line",
-          data: recentSlots.map(s => s.forecast_mw),
+          data: recentSlots.map(s => s.comparison_variant === "A" || !hasShadow ? s.forecast_mw : null),
           itemStyle: { color: ACCENT_COLOR },
           lineStyle: { width: 2, color: ACCENT_COLOR },
           symbol: "none",
           z: 2,
         },
+        ...(hasShadow && hasFinal ? [{
+          name: "My forecast (consolidated scale)",
+          type: "line",
+          data: recentSlots.map(s => isFinal(s.actual_vintage) ? s.forecast_mw : null),
+          itemStyle: { color: ACCENT_COLOR },
+          lineStyle: { width: 2, color: ACCENT_COLOR },
+          symbol: "none",
+          z: 2,
+        }] : []),
+        ...(hasShadow ? [{
+          name: "Served forecast (targets consolidated)",
+          type: "line",
+          data: recentSlots.map(s => isRealtime(s.actual_vintage) ? s.served_forecast_mw : null),
+          itemStyle: { color: ACCENT_COLOR },
+          lineStyle: { width: 1, type: "dotted", color: ACCENT_COLOR },
+          symbol: "none",
+          z: 1,
+        }] : []),
         {
           name: "RTE D-1",
           type: "line",
@@ -566,10 +590,10 @@
     const modelData = items.map(d => barData(d, d.model_mae));
     const rteData = items.map(d => barData(d, d.rte_mae));
 
-    const scored = items.filter(d => isFinal(d.actual_vintage) && d.model_mae !== null && d.rte_mae !== null);
+    const scored = items.filter(d => (isFinal(d.actual_vintage) || d.comparison_variant === "A") && d.model_mae !== null && d.rte_mae !== null);
     const better = scored.filter(d => d.model_mae < d.rte_mae).length;
     setText("title-daily-mae", scored.length
-      ? `Below RTE on ${better} of ${scored.length} consolidated days in the last 28 days`
+      ? `Below RTE on ${better} of ${scored.length} days in the last 28 days${scored.some(d => isRealtime(d.actual_vintage)) ? " (provisional)" : " (final)"}`
       : "Daily errors: awaiting consolidated actuals");
 
     const vintage = vintageSwitch(items, d => d.date, vintageSwitchDate);
@@ -578,10 +602,10 @@
     const notes = [];
     if (items.some(d => d.is_replay)) notes.push("Lighter bars are replay days.");
     if (vintage.beforeFirst) notes.push("All days on real-time actuals (provisional).");
-    notes.push(`${provisionalDays(items, d => d.date)} provisional days, shown with hatched bars. Comparisons use consolidated or definitive actuals only.`);
+    notes.push(`${provisionalDays(items, d => d.date)} provisional days, shown with hatched bars. Provisional bars compare shadow A with real-time actuals; final bars compare served B with consolidated actuals.`);
     setText("daily-mae-desc", notes.join(" "));
     const dailyGuide = el.parentElement.querySelector(".how-to-read");
-    if (dailyGuide) dailyGuide.textContent = "How to read: each pair of bars shows the recorded daily MAE. Hatched bars are provisional and excluded from the comparison in the title.";
+    if (dailyGuide) dailyGuide.textContent = "How to read: each pair of bars shows the recorded daily MAE. Hatched bars compare shadow A with real-time actuals and remain provisional; other bars compare served B with final actuals.";
 
     chart.setOption(baseOption({
       tooltip: {
@@ -591,6 +615,7 @@
           if (!params || params.length === 0) return "";
           const d = items[params[0].dataIndex];
           let out = `<div style="font-weight: 600; margin-bottom: 4px;">${d.date}</div>`;
+          out += `<div>Comparison: ${d.comparison_variant === "A" ? "shadow A (provisional)" : "served B"}</div>`;
           out += `<div>Actuals: ${isRealtime(d.actual_vintage) ? "real-time (provisional)" : d.actual_vintage}</div>`;
           if (d.is_replay) {
             out += `<div style="color: ${REPLAY_LABEL_COLOR}; font-weight: 600; font-size: 11px;">[REPLAY DATA]</div>`;
@@ -607,11 +632,11 @@
           if (d.rte_mean_error !== null && d.rte_mean_error !== undefined) {
             out += `<div>RTE bias (forecast minus actual): ${fmt(d.rte_mean_error)} MW</div>`;
           }
-          if (isFinal(d.actual_vintage) && d.model_mae !== null && d.rte_mae !== null) {
+          if ((isFinal(d.actual_vintage) || d.comparison_variant === "A") && d.model_mae !== null && d.rte_mae !== null) {
             const gap = d.model_mae - d.rte_mae;
             const pct = d.rte_mae > 0 ? ((d.rte_mae - d.model_mae) / d.rte_mae) * 100 : 0;
             const color = gap <= 0 ? "#5fd08b" : "#ff8a80";
-            out += `<div style="color:${color}; font-weight: 600;">Difference: ${gap > 0 ? "+" : ""}${fmt(gap)} MW (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)</div>`;
+            out += `<div style="color:${color}; font-weight: 600;">${isRealtime(d.actual_vintage) ? "Provisional difference" : "Difference"}: ${gap > 0 ? "+" : ""}${fmt(gap)} MW (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)</div>`;
           }
           return out;
         },
@@ -668,7 +693,7 @@
     const last = history[history.length - 1];
     if (last.model_rolling_mae !== null && last.rte_rolling_mae !== null) {
       setText("title-rolling-mae",
-        `On ${shortDate(last.date)}, error over ${last.comparison_days} consolidated days was ${fmt(last.model_rolling_mae)} MW for my model and ${fmt(last.rte_rolling_mae)} MW for RTE`);
+        `On ${shortDate(last.date)}, error over ${last.comparison_days} days${last.provisional_days ? " (provisional)" : " (final)"} was ${fmt(last.model_rolling_mae)} MW for my model and ${fmt(last.rte_rolling_mae)} MW for RTE`);
     } else {
       setText("title-rolling-mae", "28-day comparison: awaiting consolidated actuals");
     }
@@ -676,10 +701,10 @@
     const vintage = vintageSwitch(history, r => r.date, vintageSwitchDate);
     const notes = [];
     if (history.some(r => r.is_replay)) notes.push("The shaded part is replay.");
-    notes.push("Each 28-day window includes consolidated or definitive days only. Provisional errors remain in the daily bars and consumption curves.");
+    notes.push("Each window compares A with real-time actuals (provisional) and B with consolidated actuals (final).");
     setText("rolling-mae-desc", notes.join(" "));
     const rollingGuide = el.parentElement.querySelector(".how-to-read");
-    if (rollingGuide) rollingGuide.textContent = "How to read: each point averages only consolidated or definitive daily errors in the previous 28 calendar days. A gap means no eligible days; provisional days do not enter either line.";
+    if (rollingGuide) rollingGuide.textContent = "How to read: each point averages daily errors on the matching actuals scale over 28 calendar days. Windows containing real-time actuals remain provisional.";
 
     chart.setOption(baseOption({
       tooltip: {
@@ -688,7 +713,7 @@
           if (!params || params.length === 0) return "";
           const r = history[params[0].dataIndex];
           let out = `<div style="font-weight: 600; margin-bottom: 4px;">${r.date}</div>`;
-          out += `<div>${r.comparison_days} consolidated or definitive days in the 28-day window</div>`;
+          out += `<div>${r.comparison_days} days in the 28-day window, ${r.provisional_days} provisional</div>`;
           if (r.is_replay) {
             out += `<div style="color: ${REPLAY_LABEL_COLOR}; font-weight: 600; font-size: 11px;">[REPLAY DATA]</div>`;
           }
@@ -887,8 +912,8 @@
     }
 
     const mae = tiles.rolling_28d_mae;
-    show("tile-mae-provisional", false);
-    show("tile-beating-provisional", false);
+    show("tile-mae-provisional", Boolean(mae && mae.is_provisional));
+    show("tile-beating-provisional", Boolean(mae && mae.is_provisional));
     if (mae && mae.status === "awaiting_consolidated") {
       ["tile-mae-val", "tile-beating-val"].forEach(id => {
         setText(id, "awaiting consolidated actuals");
@@ -905,13 +930,13 @@
       setText("tile-mae-val", `${fmt(mae.model_mw)} vs ${fmt(mae.rte_mw)} MW`);
       const diff = mae.gap_mw <= 0 ? `${fmt(mae.gap_mw)} MW` : `+${fmt(mae.gap_mw)} MW`;
       const gainText = gain >= 0 ? `+${gain.toFixed(1)}%` : `${gain.toFixed(1)}%`;
-      setText("tile-mae-sub", `${mae.total_days} consolidated days, ${mae.provisional_days} provisional days excluded. Difference ${diff}, ${gainText} relative gain`);
+      setText("tile-mae-sub", `${mae.total_days} days, ${mae.provisional_days} provisional (shadow A). Difference ${diff}, ${gainText} relative gain`);
     }
 
     const beating = tiles.beating_rte;
     if (beating && beating.pct !== null) {
       setText("tile-beating-val", `${beating.pct}%`);
-      setText("tile-beating-sub", `${beating.better_days} of ${beating.total_days} consolidated days, ${beating.provisional_days} provisional days excluded`);
+      setText("tile-beating-sub", `${beating.better_days} of ${beating.total_days} days, ${beating.provisional_days} provisional (shadow A)`);
     }
 
     const counts = tiles.delivery_counts;
