@@ -949,6 +949,11 @@
 
   function renderCharts(data) {
     const charts = [];
+    const degradedDays = data.degraded_deliveries || [];
+    setText("degraded-inputs", degradedDays.length
+      ? `Degraded inputs: ${degradedDays.map(d => d.date).join(", ")}. These forecasts used backup experts or consumption older than the expected cutoff slot.`
+      : "");
+    show("degraded-inputs", degradedDays.length > 0);
     const recentSlots = (data.recent_7d && data.recent_7d.length > 0) ? data.recent_7d : (data.recent_14d || []);
     const dailyItems = (data.daily_mae_28d && data.daily_mae_28d.length > 0)
       ? data.daily_mae_28d
