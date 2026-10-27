@@ -155,6 +155,12 @@
           </article>
 
           <article class="panel chart-block">
+            <label for="comparison-mode">28-day comparison</label>
+            <select id="comparison-mode">
+              <option value="all_live" selected>All live days</option>
+              <option value="excluding_degraded">Excluding degraded deliveries</option>
+            </select>
+            <p class="how-to-read" id="comparison-scope">Includes days served on degraded inputs or fallback forecasts when complete paired scores are available.</p>
             <h3 class="chart-title" id="title-rolling-mae">Rolling 28-day error</h3>
             <p class="chart-finding" id="rolling-mae-desc"></p>
             <div id="chart-rolling-mae" class="chart chart-compact"></div>

@@ -678,3 +678,14 @@ a {
     padding: var(--s3) var(--s2) var(--s4);
   }
 }
+
+#comparison-mode {
+  display: block;
+  max-width: 100%;
+  margin: .5rem 0 1rem;
+  padding: .55rem;
+  font: inherit;
+  color: var(--text-strong);
+  background: var(--panel);
+  border: 1px solid var(--border);
+}

@@ -580,9 +580,12 @@
     const chart = echarts.init(el);
     const isMobile = isMobileEl(el);
     const dates = items.map(d => d.date.slice(5));
+    const hasDegraded = items.some(d => (d.degraded_inputs || []).length > 0);
     function barData(d, value) {
       return { value, is_replay: d.is_replay, date: d.date,
-        itemStyle: { decal: isRealtime(d.actual_vintage) ? {
+        itemStyle: { borderColor: MARKER_COLOR,
+          borderWidth: (d.degraded_inputs || []).length ? 2 : 0,
+          decal: isRealtime(d.actual_vintage) ? {
           symbol: "rect", dashArrayX: [1, 0], dashArrayY: [2, 4],
           rotation: Math.PI / 4, color: "rgba(15, 18, 23, 0.6)",
         } : null } };
@@ -603,6 +606,7 @@
     if (items.some(d => d.is_replay)) notes.push("Lighter bars are replay days.");
     if (vintage.beforeFirst) notes.push("All days on real-time actuals (provisional).");
     notes.push(`${provisionalDays(items, d => d.date)} provisional days, shown with hatched bars. Provisional bars compare shadow A with real-time actuals; final bars compare served B with consolidated actuals.`);
+    if (hasDegraded) notes.push("Outlined bars mark degraded inputs.");
     setText("daily-mae-desc", notes.join(" "));
     const dailyGuide = el.parentElement.querySelector(".how-to-read");
     if (dailyGuide) dailyGuide.textContent = "How to read: each pair of bars shows the recorded daily MAE. Hatched bars compare shadow A with real-time actuals and remain provisional; other bars compare served B with final actuals.";
@@ -641,8 +645,11 @@
           return out;
         },
       },
-      legend: { data: ["Model Daily MAE", "RTE D-1 Daily MAE"], top: 0, textStyle: { fontSize: 12 } },
-      grid: { left: "3%", right: "3%", bottom: "8%", top: isMobile ? 64 : "16%", containLabel: true },
+      legend: { data: ["Model Daily MAE", "RTE D-1 Daily MAE", ...(hasDegraded ? [{
+        name: "degraded inputs", icon: "rect",
+        itemStyle: { color: "transparent", borderColor: MARKER_COLOR, borderWidth: 2 },
+      }] : [])], top: 0, textStyle: { fontSize: 12 } },
+      grid: { left: "3%", right: "3%", bottom: "8%", top: isMobile ? (hasDegraded ? 88 : 64) : "16%", containLabel: true },
       xAxis: {
         type: "category",
         data: dates,
@@ -673,12 +680,16 @@
           data: rteData,
           itemStyle: { color: p => (p.data.is_replay ? RTE_REPLAY_BAR : RTE_COLOR) },
         },
+        ...(hasDegraded ? [{
+          name: "degraded inputs", type: "line", data: [], silent: true,
+          itemStyle: { color: "transparent", borderColor: MARKER_COLOR, borderWidth: 2 },
+        }] : []),
       ],
     }));
     return chart;
   }
 
-  function renderRollingMaeChart(domId, history, vintageSwitchDate) {
+  function renderRollingMaeChart(domId, history, vintageSwitchDate, dayScope = "days") {
     const el = document.getElementById(domId);
     if (!el || !history || history.length === 0) {
       placeholder(el, "No rolling MAE data available.");
@@ -693,9 +704,9 @@
     const last = history[history.length - 1];
     if (last.model_rolling_mae !== null && last.rte_rolling_mae !== null) {
       setText("title-rolling-mae",
-        `On ${shortDate(last.date)}, error over ${last.comparison_days} days${last.provisional_days ? " (provisional)" : " (final)"} was ${fmt(last.model_rolling_mae)} MW for my model and ${fmt(last.rte_rolling_mae)} MW for RTE`);
+        `On ${shortDate(last.date)}, over the ${last.comparison_days} ${dayScope} of the last 28${last.provisional_days ? " (provisional)" : " (final)"}: ${fmt(last.model_rolling_mae)} MW for my model, ${fmt(last.rte_rolling_mae)} MW for RTE`);
     } else {
-      setText("title-rolling-mae", "28-day comparison: awaiting consolidated actuals");
+      setText("title-rolling-mae", "28-day comparison: awaiting complete paired days");
     }
 
     const vintage = vintageSwitch(history, r => r.date, vintageSwitchDate);
@@ -896,7 +907,10 @@
   }
 
   function fillFigures(data) {
-    const tiles = data.header_tiles || {};
+    const liveDefault = data.live_comparisons && data.live_comparisons.all_live;
+    const comparison = data.comparison_tiles || (liveDefault && liveDefault.history.length
+      ? liveDefault.header_tiles : {});
+    const tiles = {...(data.header_tiles || {}), ...comparison};
     fillStatusPill(tiles.delivery_counts);
 
     if (data.tomorrow && data.tomorrow.delivery_day) {
@@ -914,9 +928,9 @@
     const mae = tiles.rolling_28d_mae;
     show("tile-mae-provisional", Boolean(mae && mae.is_provisional));
     show("tile-beating-provisional", Boolean(mae && mae.is_provisional));
-    if (mae && mae.status === "awaiting_consolidated") {
+    if (mae && ["awaiting_consolidated", "awaiting_complete"].includes(mae.status)) {
       ["tile-mae-val", "tile-beating-val"].forEach(id => {
-        setText(id, "awaiting consolidated actuals");
+        setText(id, mae.status === "awaiting_complete" ? "awaiting complete paired live days" : "awaiting consolidated actuals");
         document.getElementById(id).style.fontSize = "1rem";
       });
       setText("tile-mae-sub", `${mae.provisional_days} provisional days in the 28-day window`);
@@ -963,11 +977,33 @@
       renderTomorrowChart("chart-tomorrow", data.tomorrow),
       renderRecent7dChart("chart-recent7d", recentSlots),
       renderDailyMae28dChart("chart-daily-mae-28d", dailyItems, data.vintage_switch_date),
-      renderRollingMaeChart("chart-rolling-mae", data.rolling_mae_history, data.vintage_switch_date),
       renderCusumChart("chart-cusum", data.cusum_history),
     ].forEach(c => { if (c) charts.push(c); });
 
-    window.addEventListener("resize", () => charts.forEach(c => c.resize()));
+    const selector = document.getElementById("comparison-mode");
+    let rollingChart;
+    function selectComparison(mode) {
+      const comparison = data.live_comparisons && data.live_comparisons[mode];
+      const hasLive = comparison && comparison.history.length > 0;
+      fillFigures({...data, comparison_tiles: hasLive ? comparison.header_tiles : {}});
+      if (rollingChart) rollingChart.dispose();
+      rollingChart = renderRollingMaeChart("chart-rolling-mae",
+        hasLive ? comparison.history : data.rolling_mae_history, data.vintage_switch_date,
+        hasLive ? (mode === "all_live" ? "live days" : "clean days") : "days");
+      setText("comparison-scope", hasLive
+        ? (mode === "all_live"
+          ? "Includes days served on degraded inputs or fallback forecasts when complete paired scores are available."
+          : "Leaves out days served on backup experts or stale inputs, to show the model with fresh inputs.")
+        : "No live comparisons yet. The chart and tiles show replay history.");
+    }
+    selectComparison("all_live");
+    if (selector && selector.addEventListener) {
+      selector.addEventListener("change", () => selectComparison(selector.value));
+    }
+    window.addEventListener("resize", () => {
+      charts.forEach(c => c.resize());
+      if (rollingChart) rollingChart.resize();
+    });
   }
 
   function hideDataLinks() {
