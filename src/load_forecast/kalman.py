@@ -70,6 +70,8 @@ class Window:
     design: np.ndarray
     pos: np.ndarray
     rows: list[np.ndarray] = field(default_factory=list)
+    centre: np.ndarray | None = None
+    scale: np.ndarray | None = None
 
     def day_index(self, day: date) -> int:
         return self.days.index(day)
@@ -172,20 +174,18 @@ def build_window(
     day_of_row = np.concatenate([[i] * len(features[d]) for i, d in enumerate(days)])
     in_training = np.isin(np.asarray(ev.local_dates(frame.index)), training_days)
     values = effects.to_numpy()
-    standard = np.full_like(values, np.nan)
+    centres = np.full((N_SLOTS, len(EFFECT_COLUMNS)), np.nan)
+    scales = np.full((N_SLOTS, len(EFFECT_COLUMNS)), np.nan)
     for s in range(N_SLOTS):
         rows = slot == s
         fit_rows = rows & in_training & np.isfinite(values).all(axis=1)
         if not fit_rows.any():
             continue
-        centre = values[fit_rows].mean(axis=0)
-        scale = values[fit_rows].std(axis=0)
-        flat = scale < 1e-9
-        scale[flat] = 1.0
-        standard[rows] = (values[rows] - centre) / scale
-        standard[np.ix_(rows, np.flatnonzero(flat))] = 0.0
-    window = Window(days=days, index=frame.index, gam=values.sum(axis=1), design=standard,
-                    pos=np.full((len(days), 2, N_SLOTS), -1))
+        centres[s] = values[fit_rows].mean(axis=0)
+        scales[s] = values[fit_rows].std(axis=0)
+    window = Window(days=days, index=frame.index, gam=values.sum(axis=1),
+                    design=standardize(values, slot, centres, scales),
+                    pos=np.full((len(days), 2, N_SLOTS), -1), centre=centres, scale=scales)
     seen: dict[tuple[int, int], int] = {}
     for p, (t, s) in enumerate(zip(day_of_row, slot, strict=True)):
         k = seen.get((t, s), 0)
@@ -195,6 +195,57 @@ def build_window(
         window.pos[t, k, s] = p
     window.rows = [np.flatnonzero(day_of_row == t) for t in range(len(days))]
     return window
+
+
+def standardize(values: np.ndarray, slot: np.ndarray, centres: np.ndarray,
+                scales: np.ndarray) -> np.ndarray:
+    """(effect - training mean) / training sd per slot; a flat effect is 0, an unfitted slot NaN."""
+    standard = np.full_like(values, np.nan)
+    for s in range(N_SLOTS):
+        if not np.isfinite(centres[s]).all():
+            continue
+        rows = slot == s
+        scale = scales[s].copy()
+        flat = scale < 1e-9
+        scale[flat] = 1.0
+        standard[rows] = (values[rows] - centres[s]) / scale
+        standard[np.ix_(rows, np.flatnonzero(flat))] = 0.0
+    return standard
+
+
+def extend_window(window: Window, models: dict[int, Model], day: date,
+                  features: pd.DataFrame) -> None:
+    """Append the next delivery day in place, with the standardization fixed at the refit.
+
+    Production builds the features of a day at that day's own freeze, so the days after the refit
+    are added one by one; the rows equal those `build_window` gives when it is handed the same days.
+    """
+    if window.centre is None or window.scale is None:
+        raise ValueError('The window holds no standardization')
+    if day != window.days[-1] + timedelta(days=1):
+        raise ValueError('Days must be appended in calendar order')
+    slot = np.asarray(local_slots(features.index))
+    effects = pd.DataFrame(np.nan, index=features.index, columns=EFFECT_COLUMNS)
+    for s in range(N_SLOTS):
+        rows = slot == s
+        if rows.any():
+            part = models[s].partial_effects(features.loc[rows], EFFECT_GROUPS)
+            effects.loc[rows] = part[EFFECT_COLUMNS].to_numpy()
+    values = effects.to_numpy()
+    start = len(window.index)
+    pos = np.full((1, 2, N_SLOTS), -1)
+    for k, s in enumerate(slot):
+        occurrence = int((slot[:k] == s).sum())
+        if occurrence > 1:
+            raise ValueError('A local slot occurs more than twice in one delivery day')
+        pos[0, occurrence, s] = start + k
+    window.days.append(day)
+    window.index = window.index.append(features.index)
+    window.gam = np.concatenate([window.gam, values.sum(axis=1)])
+    window.design = np.concatenate([window.design,
+                                    standardize(values, slot, window.centre, window.scale)])
+    window.pos = np.concatenate([window.pos, pos])
+    window.rows.append(np.arange(start, start + len(features)))
 
 
 def day_arrays(window: Window, t: int) -> tuple[np.ndarray, np.ndarray]:

@@ -15,6 +15,7 @@ venv/
 
 # Data and artifacts (never in git)
 data/
+site/data/
 *.parquet
 *.feather
 *.pkl

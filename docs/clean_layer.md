@@ -6,6 +6,31 @@ I build the production relation `analytics.load_30min` with `--target prod`.
 Development targets write into their own schemas; I select their relation for Python
 with `LFF_CLEAN_TABLE`. Its default is `analytics.load_30min`.
 
+For a production delivery day, I call `build_clean_snapshot` from
+`load_forecast.clean_snapshot` after loading the environment:
+
+```python
+from datetime import date
+from load_forecast.clean_snapshot import build_clean_snapshot
+
+table = build_clean_snapshot(date(2026, 10, 9), schema="dev")
+```
+
+I supply my writable development schema explicitly. The helper refuses before
+the day's freeze, computes that freeze in UTC, and runs dbt with `ingested_before`.
+This strict `ingested_at < F` filter applies before D12 and source selection, so a
+consolidated revision arriving at or after F cannot replace a known real-time row.
+Without the variable, the clean model keeps its existing output.
+
+The helper materializes `load_30min_snapshot_YYYYMMDD` in that schema. It inlines
+the intermediate model for this run and preserves the ordinary clean relations.
+After dbt succeeds, it sets `LFF_CLEAN_TABLE` in the calling Python process and
+returns the relation name. A failed run leaves that setting unchanged. Repeating
+the same day rebuilds the same dated table from the same freeze. I run models
+with `dbt run`, because the existing full-history dbt tests assume complete days
+and inspect raw revisions without an ingestion boundary. Feature builders still
+apply D2 separately. This helper does not reconstruct pre-archive availability.
+
 ---
 
 ## 1. Model Specification and Business Rules

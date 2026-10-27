@@ -12,6 +12,7 @@ from load_forecast.gam_model import TEMPERATURE_COLUMN, SlotGAM, lagged_gam_feat
 from load_forecast.kalman import (
     N_STATE,
     build_window,
+    extend_window,
     fit_variances,
     initial_state,
     log_likelihood,
@@ -209,6 +210,34 @@ def test_a_dst_day_has_a_second_occurrence_and_a_short_day_misses_slots():
     assert np.isfinite(window.gam[window.rows[2]]).all()
     flat = window.design[:, 2]
     assert np.isfinite(flat).all() and (flat == 0).all()
+
+
+def test_days_appended_one_by_one_equal_the_window_built_at_once():
+    class Stub:
+        def partial_effects(self, x, groups):
+            values = np.asarray(local_slots(x.index), dtype=float) + x['a'].to_numpy()
+            return pd.DataFrame({'base': values, 'lags': values ** 2, 'smooth': -values},
+                                index=x.index)
+
+    def builder(slots, history, day):
+        return pd.DataFrame({'a': float(day.day)}, index=slots)
+
+    empty = pd.Series(dtype=float, index=pd.DatetimeIndex([], tz='UTC'))
+    days = [date(2024, 10, 24) + timedelta(days=k) for k in range(5)]  # 27 October has 50 slots
+    features = {d: day_features(empty, d, builder) for d in days}
+    models = {s: Stub() for s in range(48)}
+    whole = build_window(models, features, days, days[:2])
+    grown = build_window(models, features, days[:2], days[:2])
+    for d in days[2:]:
+        extend_window(grown, models, d, features[d])
+    assert grown.days == whole.days and grown.index.equals(whole.index)
+    np.testing.assert_array_equal(grown.pos, whole.pos)
+    np.testing.assert_array_equal(grown.gam, whole.gam)
+    np.testing.assert_array_equal(grown.design, whole.design)
+    for a, b in zip(grown.rows, whole.rows, strict=True):
+        np.testing.assert_array_equal(a, b)
+    with pytest.raises(ValueError, match='calendar order'):
+        extend_window(grown, models, days[-1] + timedelta(days=2), features[days[0]])
 
 
 def test_first_week_is_the_same_in_both_modes_and_later_weeks_differ():

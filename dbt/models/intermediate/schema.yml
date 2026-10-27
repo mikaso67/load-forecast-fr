@@ -24,7 +24,11 @@ models:
       - name: prevision_j
         description: "RTE Day-of (D) consumption forecast in MW"
         tests:
-          - not_null
+          # Raw versions collected before day D carry no D forecast yet; the clean
+          # model keeps the latest version, where this column is tested as an error.
+          - not_null:
+              config:
+                severity: warn
       - name: consommation
         description: "Observed power consumption in MW"
       - name: original_values

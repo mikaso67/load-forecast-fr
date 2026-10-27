@@ -168,6 +168,15 @@ def replay_points(selection: dict, rows: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(pinned, columns=list(rows[0]) if rows else [*IDENTITY, 'valid_time'])
 
 
+def pinned_temperature(
+    day: date, rows: list[dict], *, now: datetime, selection: dict | None = None,
+) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
+    """Temperature of one day from the revision pinned at its own cutoff (or a given selection)."""
+    selection = pin_selection(day, rows, now=now) if selection is None else selection
+    pinned = replay_points(selection, rows)
+    return temperature_day(day, pd.Series(selection), pinned), selection, pinned
+
+
 def read_pinned_temperature(
     connection: psycopg.Connection, day: date, selection_hash: str,
 ) -> pd.DataFrame:

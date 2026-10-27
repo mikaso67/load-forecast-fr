@@ -1,5 +1,6 @@
 {{ config(
-    materialized='table'
+    materialized='table',
+    alias=var('snapshot_relation', 'load_30min')
 ) }}
 
 WITH source_data AS (
@@ -9,6 +10,10 @@ WITH source_data AS (
         prevision_j1,
         prevision_j,
         source_dataset,
+        {% if var('snapshot_relation', none) is not none %}
+        ingested_at,
+        payload_hash,
+        {% endif %}
         ROW_NUMBER() OVER (
             PARTITION BY value_time
             ORDER BY
@@ -28,6 +33,9 @@ SELECT
     prevision_j1,
     prevision_j,
     source_dataset
+    {% if var('snapshot_relation', none) is not none %}
+    , ingested_at, payload_hash
+    {% endif %}
 FROM source_data
 WHERE source_priority = 1
 ORDER BY value_time

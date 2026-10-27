@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0f1217">
+  <title>French Electricity Load Forecast</title>
+  <meta name="description" content="A day-ahead forecast of French national electricity consumption, scored every day against the official RTE D-1 forecast.">
+  <link rel="preload" href="vendor/fonts/source-serif-4-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="vendor/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+  <script src="vendor/echarts.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#top">load-forecast-fr</a>
+      <nav class="nav" aria-label="Sections">
+        <a href="#result">Result</a>
+        <a href="#method">Method</a>
+        <a href="#forecast" data-needs-data>Forecast</a>
+        <a href="#accuracy" data-needs-data>Accuracy</a>
+        <a href="#monitoring" data-needs-data>Monitoring</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top" class="page">
+    <section class="hero">
+      <svg id="hero-curve" class="hero-curve" aria-hidden="true" focusable="false" preserveAspectRatio="none"></svg>
+      <div class="hero-body">
+        <p id="status-pill" class="pill" hidden></p>
+        <h1 class="hero-title">Tomorrow's French electricity demand, forecast every day at noon.</h1>
+        <p class="hero-lead">Every day before 12:00 Paris time, my model forecasts France's national electricity consumption for the next day, half-hour by half-hour, and compares it with the official day-ahead forecast of RTE, the French grid operator. Collection, forecasting, scoring and publication run automatically.</p>
+        <p id="replay-banner" class="replay-notice" hidden>Live forecasts start on 15 October 2026. Earlier days are a replay: the same production code run on past data, not forecasts published in advance.</p>
+      </div>
+    </section>
+
+    <section id="result" class="section" aria-labelledby="result-heading">
+      <h2 id="result-heading" class="section-title">Result on the locked 2025 test year</h2>
+      <p class="section-lead">Mean absolute error of the day-ahead forecast over the whole of 2025, on the same half-hours for every forecaster.</p>
+      <div class="panel bars">
+        <div class="bar-row bar-model">
+          <div class="bar-meta">
+            <p class="bar-label">My model</p>
+            <p class="bar-note">39 percent lower than raw RTE D-1</p>
+          </div>
+          <div class="bar-track"><span class="bar-fill" style="width: 61%;"></span></div>
+          <p class="bar-value">809 <span class="unit">MW</span></p>
+        </div>
+        <div class="bar-row">
+          <div class="bar-meta">
+            <p class="bar-label">RTE*</p>
+            <p class="bar-note">RTE corrected for its average hourly bias, the fairer benchmark</p>
+          </div>
+          <div class="bar-track"><span class="bar-fill" style="width: 71%;"></span></div>
+          <p class="bar-value">943 <span class="unit">MW</span></p>
+        </div>
+        <div class="bar-row">
+          <div class="bar-meta">
+            <p class="bar-label">Raw RTE D-1</p>
+            <p class="bar-note">The official forecast as published</p>
+          </div>
+          <div class="bar-track"><span class="bar-fill" style="width: 100%;"></span></div>
+          <p class="bar-value">1,325 <span class="unit">MW</span></p>
+        </div>
+      </div>
+      <p class="result-line">Evaluated once, on a year never used to build or tune the model.</p>
+    </section>
+
+    <section id="method" class="section" aria-labelledby="how-heading">
+      <h2 id="how-heading" class="section-title">How it works</h2>
+      <ol class="steps">
+        <li class="panel step">
+          <h3 class="step-title">Collect</h3>
+          <p>RTE eCO2mix consumption every 30 minutes, NOAA GFS weather forecasts.</p>
+        </li>
+        <li class="panel step">
+          <h3 class="step-title">Freeze at noon</h3>
+          <p>Only data available before 12:00 the day before is used.</p>
+        </li>
+        <li class="panel step">
+          <h3 class="step-title">Forecast</h3>
+          <p>Four models: linear regression, two GAMs one with a Kalman filter, LightGBM, combined by online aggregation. An 80 percent interval by conformal prediction.</p>
+        </li>
+        <li class="panel step">
+          <h3 class="step-title">Monitor</h3>
+          <p>Daily scoring, a CUSUM drift alarm, weekly retraining.</p>
+        </li>
+      </ol>
+    </section>
+
+    <div id="empty-state" class="panel empty-state" hidden>
+      <h3 class="empty-state-title">No forecast data available</h3>
+      <p class="empty-state-desc">The production database has not recorded any served forecasts yet. Data will appear automatically following scheduled runs.</p>
+    </div>
+
+    <div id="content-section">
+      <section id="forecast" class="section" aria-labelledby="forecast-heading">
+        <h2 id="forecast-heading" class="section-title">Forecast</h2>
+        <div class="forecast-layout">
+          <article class="panel chart-block forecast-chart">
+            <div class="chart-head">
+              <h3 class="chart-title"><span id="forecast-card-title">Forecast</span> <span id="tomorrow-badge" class="tag-replay" hidden>Replay</span></h3>
+              <span id="tomorrow-rte-note" class="chart-flag" hidden>RTE D-1 not yet published</span>
+            </div>
+            <p class="chart-finding" id="tomorrow-finding"></p>
+            <p class="chart-finding" id="degraded-inputs" role="status" hidden></p>
+            <div id="chart-tomorrow" class="chart"></div>
+            <p class="how-to-read"><strong>How to read:</strong> the blue line is my forecast for each half-hour of the day, the shaded band is the 80 percent interval, and the dashed grey line is the forecast RTE published for the same day.</p>
+          </article>
+
+          <dl class="panel figures">
+            <div class="figure">
+              <dt id="tile-peak-label">Peak Forecast</dt>
+              <dd class="figure-value figure-accent" id="tile-peak-mw">-</dd>
+              <dd class="figure-sub" id="tile-peak-sub">-</dd>
+            </div>
+            <div class="figure">
+              <dt>28-day MAE, model vs RTE D-1 <span id="tile-mae-provisional" class="tag-provisional" hidden>provisional</span></dt>
+              <dd class="figure-value" id="tile-mae-val">-</dd>
+              <dd class="figure-sub" id="tile-mae-sub">-</dd>
+            </div>
+            <div class="figure">
+              <dt>Days below RTE D-1 (28 days) <span id="tile-beating-provisional" class="tag-provisional" hidden>provisional</span></dt>
+              <dd class="figure-value" id="tile-beating-val">-</dd>
+              <dd class="figure-sub" id="tile-beating-sub">-</dd>
+            </div>
+            <div class="figure">
+              <dt>Delivery status</dt>
+              <dd class="figure-value" id="tile-deliveries-val">-</dd>
+              <dd class="figure-sub" id="tile-deliveries-sub">-</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section id="accuracy" class="section" aria-labelledby="accuracy-heading">
+        <h2 id="accuracy-heading" class="section-title">Accuracy</h2>
+
+        <article class="panel chart-block">
+          <h3 class="chart-title" id="title-recent7d">Last 7 days: actual consumption against both forecasts</h3>
+          <p class="chart-finding" id="finding-recent7d"></p>
+          <div id="chart-recent7d" class="chart"></div>
+          <p class="how-to-read"><strong>How to read:</strong> the white line is what France actually consumed, so the closer a forecast follows it the better, and the slider below the chart zooms in on any part of the week.</p>
+        </article>
+
+        <div class="pair">
+          <article class="panel chart-block">
+            <h3 class="chart-title" id="title-daily-mae">Daily error against RTE D-1, last 28 days</h3>
+            <p class="chart-finding" id="daily-mae-desc"></p>
+            <div id="chart-daily-mae-28d" class="chart chart-compact"></div>
+            <p class="how-to-read"><strong>How to read:</strong> each pair of bars is one day, the blue bar is my mean absolute error and the grey bar is RTE's, so a blue bar shorter than its grey neighbour means a better day.</p>
+          </article>
+
+          <article class="panel chart-block">
+            <label for="comparison-mode">28-day comparison</label>
+            <select id="comparison-mode">
+              <option value="all_live" selected>All live days</option>
+              <option value="excluding_degraded">Excluding degraded deliveries</option>
+            </select>
+            <p class="how-to-read" id="comparison-scope">Includes days served on degraded inputs or fallback forecasts when complete paired scores are available.</p>
+            <h3 class="chart-title" id="title-rolling-mae">Rolling 28-day error</h3>
+            <p class="chart-finding" id="rolling-mae-desc"></p>
+            <div id="chart-rolling-mae" class="chart chart-compact"></div>
+            <p class="how-to-read"><strong>How to read:</strong> each point averages the error of the previous 28 days, and because real-time actuals are provisional, compare the two lines on one side of the dashed marker rather than across it.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="monitoring" class="section" aria-labelledby="monitoring-heading">
+        <h2 id="monitoring-heading" class="section-title">Monitoring</h2>
+        <article class="panel chart-block">
+          <h3 class="chart-title" id="title-cusum">Drift monitor</h3>
+          <p class="chart-finding" id="finding-cusum"></p>
+          <div id="chart-cusum" class="chart chart-compact"></div>
+          <p class="how-to-read"><strong>How to read:</strong> the two lines add up standardized errors from day to day, one for each direction of persistent drift, and an alarm is raised only when either line crosses the red dashed threshold.</p>
+        </article>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <p class="footer-links"><a href="https://github.com/mikaso67/load-forecast-fr" target="_blank" rel="noopener">Code and method on GitHub</a></p>
+      <p>Data sources: RTE eCO2mix via ODRE, NOAA GFS.</p>
+      <p>Last updated: <span id="meta-updated">Loading...</span> (Europe/Paris)</p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

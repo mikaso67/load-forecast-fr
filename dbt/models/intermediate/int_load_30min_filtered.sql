@@ -1,7 +1,14 @@
 {{ config(
-    materialized='view'
+    materialized='ephemeral' if var('snapshot_relation', none) is not none else 'view'
 ) }}
 
+{% if var('ingested_before', none) is not none %}
+WITH known_rows AS (
+    SELECT *
+    FROM {{ source('raw', 'eco2mix') }}
+    WHERE ingested_at < '{{ var("ingested_before") }}'::timestamptz
+)
+{% endif %}
 SELECT
     value_time,
     consommation,
@@ -11,7 +18,7 @@ SELECT
     original_values,
     ingested_at,
     payload_hash
-FROM {{ source('raw', 'eco2mix') }}
+FROM {% if var('ingested_before', none) is not none %}known_rows{% else %}{{ source('raw', 'eco2mix') }}{% endif %}
 WHERE
     -- Keep only UTC half-hour timestamps (minutes 00 and 30)
     extract(minute FROM value_time AT TIME ZONE 'UTC')::int IN (0, 30)

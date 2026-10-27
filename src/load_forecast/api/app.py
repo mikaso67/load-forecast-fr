@@ -1,15 +1,14 @@
 """FastAPI routes. Dependency failures return fixed messages, never exception text."""
 
 from datetime import UTC, date, datetime
+from typing import Any
 
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from load_forecast import evaluation as ev
-from load_forecast.api.service import MODEL_NAME, TRAINING_START, predict, read_history, refit_date
-from load_forecast.cutoff import forecast_cutoff
+from load_forecast.api.service import read_run_events, read_served_forecast
 from load_forecast.eco2mix import connect_database
 from load_forecast.tracking import mlflow_tracking_uri
 
@@ -19,16 +18,41 @@ app = FastAPI(title='French load forecast', debug=False)
 class ForecastSlot(BaseModel):
     timestamp_utc: datetime
     timestamp_paris: datetime
+    local_slot: int
     forecast_mw: float
+    lower_mw: float | None = None
+    upper_mw: float | None = None
+    n_pool: int | None = None
 
 
 class ForecastResponse(BaseModel):
     delivery_date: date
-    cutoff_utc: datetime
-    model_name: str
-    refit_date: date
-    refit_cutoff_utc: datetime
-    forecasts: list[ForecastSlot]
+    kind: str
+    model_or_fallback: str | None = None
+    choice_hash: str
+    chosen_at: datetime
+    interval: dict[str, Any] | None = None
+    values: list[ForecastSlot] = []
+    forecasts: list[ForecastSlot] = []
+
+
+class RunEvent(BaseModel):
+    run_id: str
+    delivery_day: date
+    freeze_time: datetime
+    kind: str
+    started_at: datetime
+    code_commit: str
+    completed_at: datetime | None = None
+    status: str | None = None
+    refit_day: date | None = None
+    mlflow_run_id: str | None = None
+    kalman_quarter: str | None = None
+    weather_status: str | None = None
+    last_consumption_slot: datetime | None = None
+    max_ingested_at: datetime | None = None
+    feature_hash: str | None = None
+    flags: dict[str, Any] | None = None
 
 
 def now_utc() -> datetime:
@@ -63,24 +87,44 @@ def health() -> JSONResponse:
 
 @app.get('/forecast/{delivery_date}', response_model=ForecastResponse)
 def forecast(delivery_date: date) -> ForecastResponse:
-    if delivery_date <= TRAINING_START:
-        raise HTTPException(400, 'Delivery date precedes usable training history')
-    cutoff = forecast_cutoff(delivery_date)
-    if cutoff > now_utc():
-        raise HTTPException(400, 'Delivery cutoff is in the future')
-    if refit_date(delivery_date) <= TRAINING_START:
-        raise HTTPException(400, 'Delivery date precedes usable training history')
     try:
-        predictions = predict(delivery_date, read_history(delivery_date))
+        data = read_served_forecast(delivery_date)
+    except FileNotFoundError:
+        raise HTTPException(404, 'No forecast found for delivery date') from None
+    except ValueError:
+        raise HTTPException(500, 'Serving choice corrupted or invalid') from None
     except Exception:
         raise HTTPException(503, 'Forecast unavailable') from None
-    refit = refit_date(delivery_date)
+
+    slots = [
+        ForecastSlot(
+            timestamp_utc=row['timestamp_utc'],
+            timestamp_paris=row['timestamp_paris'],
+            local_slot=row['local_slot'],
+            forecast_mw=row['forecast_mw'],
+            lower_mw=row.get('lower_mw'),
+            upper_mw=row.get('upper_mw'),
+            n_pool=row.get('n_pool'),
+        )
+        for row in data.get('values', [])
+    ]
     return ForecastResponse(
-        delivery_date=delivery_date, cutoff_utc=cutoff, model_name=MODEL_NAME,
-        refit_date=refit, refit_cutoff_utc=forecast_cutoff(refit), forecasts=[
-            ForecastSlot(timestamp_utc=stamp.to_pydatetime(),
-                         timestamp_paris=stamp.tz_convert('Europe/Paris').to_pydatetime(),
-                         forecast_mw=float(value))
-            for stamp, value in predictions[ev.MODEL].items()
-        ],
+        delivery_date=data['delivery_date'],
+        kind=data['kind'],
+        model_or_fallback=data.get('model_or_fallback'),
+        choice_hash=data['choice_hash'],
+        chosen_at=data['chosen_at'],
+        interval=data.get('interval'),
+        values=slots,
+        forecasts=slots,
     )
+
+
+@app.get('/runs/{delivery_date}', response_model=list[RunEvent])
+def runs(delivery_date: date) -> list[RunEvent]:
+    try:
+        events = read_run_events(delivery_date)
+    except Exception:
+        raise HTTPException(503, 'Database unavailable') from None
+    return [RunEvent(**event) for event in events]
+

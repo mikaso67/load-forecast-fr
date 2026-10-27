@@ -25,6 +25,12 @@ From the repository root, after setting the environment:
 $env:PYTHONPATH = 'src'
 & ../load-forecast-fr-venv/Scripts/python.exe -m load_forecast.eco2mix
 & ../load-forecast-fr-venv/Scripts/python.exe -m load_forecast.eco2mix --start 2024-01-01 --end 2025-01-01 --dataset eco2mix-national-cons-def
+
+# Weekly consolidated refresh (runs once a week to ingest consolidated data from 2026-07-01 onward and record first appearances):
+& ../load-forecast-fr-venv/Scripts/python.exe -m load_forecast.eco2mix --mode weekly-consolidated
+
+# Real-time consumption collection (runs every 30 minutes to append recent quarter-hours):
+& ../load-forecast-fr-venv/Scripts/python.exe -m load_forecast.eco2mix --mode realtime-30min
 ```
 
 Dates are half-open Paris calendar dates. The default starts at 2021-03-23 and
@@ -33,6 +39,16 @@ consolidated/definitive and real-time datasets are requested independently in
 monthly JSON exports using `where`, `order_by=date_heure`, and `timezone=UTC`.
 No interpolation, dataset precedence, DST repair or forecast input selection is
 performed. A batch validates fully before an atomic insert.
+
+The collector provides two operational modes:
+- `--mode weekly-consolidated`: requests the consolidated dataset (`eco2mix-national-cons-def`)
+  from 2026-07-01 onward using monthly windows. When a month returns records for the first
+  time, its first ingestion timestamp is permanently recorded in `raw.eco2mix_first_appearance`.
+  Unpublished months (0 records) are not recorded. Running this weekly is idempotent:
+  already ingested rows and the earliest recorded timestamps are preserved.
+- `--mode realtime-30min`: collects recent real-time quarter-hours (`eco2mix-national-tr`,
+  by default the last 2 days), appending new and revised records with their ingestion timestamp
+  into `raw.eco2mix`, providing an upper bound on the publication delay.
 
 The raw key is `(source_dataset, value_time, payload_hash)`, with a SHA-256 hash
 of the canonical full source object. Identical originals are skipped and different
@@ -43,8 +59,16 @@ This is an archive of distinct values first seen, not a complete revision timeli
 if a source later reverts to a previously seen identical object it is skipped too.
 Ingestion time does not establish the historical publication time.
 
+The table `raw.eco2mix_first_appearance` records `(source_dataset, month, first_ingested_at, record_count)`
+with primary key `(source_dataset, month)`. Row storage and the first-appearance record commit in the
+same transaction, and the recorded appearance timestamp recovers the earliest `ingested_at` stored
+for that month if records were already present.
+
 Every HTTP attempt, including retries and failures, is reserved and committed to
-`raw.eco2mix_api_calls` before the request. A PostgreSQL advisory transaction lock
+`raw.eco2mix_api_calls` before the request. Dry-run requests go through the same quota reservation
+when database access is available; if dry-run cannot reserve without the database, it makes at most
+one attempt per request without retries. Writer modes check role privileges before any mutating SQL
+and refuse execution under a read-only role. A PostgreSQL advisory transaction lock
 serializes the monthly budget check across collector processes using this database.
 The collector stops at 45,000 reserved attempts per UTC month. ODRE documents a
 50,000-call monthly quota; other clients sharing the provider's quota must be

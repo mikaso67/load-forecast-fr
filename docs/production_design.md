@@ -239,7 +239,8 @@ P2. Warm start.
   fitted at a 2025 cutoff and no 2025 forecast is computed. From 2026-01-05 on, every refit and every Kalman
   restart trains on the history including 2025, as any production refit must: 2025 is then training data for
   2026 forecasts, never an evaluation period (P3). Costs: the first-quarter variances differ from an
-  uninterrupted warm-start chain, and a declared four-day gap.
+  uninterrupted warm-start chain, and a declared four-day gap. The code enforces the gap: the production
+  entry point and the replay refuse every day before 2026-01-05 before any fit, update or state change.
 - B. Exact chain on the test data. Besides the reconstruction above, refit without forecasting the models of
   Monday 2025-12-29 and the eight quarterly variance fits of the test walk (first refits of each quarter from
   2024-01-01 to 2025-10-06) on a clean layer built with `ingested_before` set to the start of the test run
@@ -272,10 +273,43 @@ Recommendation: A.
 
 ### 2.5 Acceptance test before go-live
 
-The production function, run in replay mode over 2024 with the 2023 burn-in, must reproduce the EXP-012
-outputs: the four experts and the aggregate to 0.01 MW (1015.70, 911.85, 885.32, 1113.94 and 828.52) and the
-intervals slot by slot to 1e-6 MW (`data/experiments/EXP-012/intervals.csv`). This proves that production runs
-the validated model and not a re-implementation.
+The production function, run in replay mode over 2024 with the 2023 burn-in, must reproduce the validated
+outputs (decision D22):
+- the MAE of each of the four experts and of the aggregate to 0.01 MW (1015.70, 911.85, 885.32, 1113.94 and
+  828.52);
+- the pool size of every interval slot exactly (`n_pool` of `data/experiments/EXP-012/intervals.csv`);
+- each of the four experts (`data/experiments/EXP-009/experts_2024.csv`), the aggregate and the intervals
+  compared slot by slot with the saved outputs, with a largest absolute difference of at most 0.1 MW.
+
+This proves that production runs the validated model and not a re-implementation. The command is
+`python scripts/check_production_replay.py [state folder]`; with `--saved [replay folder]` it evaluates a
+replay already saved, without running it again. The first four 2026 days are outside this test: they are
+declared without forecast (section 2.4, P2 A).
+
+Result of the 2024 replay (each day restarted from its stored state file): the five MAEs are within 0.01 MW;
+every pool size is equal; the largest slot differences are 0 MW for EXP-004, EXP-005 and EXP-008 (bitwise
+equal), 0.081 MW for EXP-007, 0.034 MW for the aggregate and 0.041 MW for the intervals.
+
+Why the criterion is 0.1 MW and not bitwise equality. The only slots that differ are those of EXP-007 from
+Monday 2024-10-07, the first refit of the fourth quarter, and what the aggregate and the intervals derive from
+them. The first three quarterly variance fits of the Kalman correction agree to every printed digit. The
+fourth differs in this way:
+- at the 2024-10-07 refit, the training design built through Monday (production) and through Sunday (the
+  backtest walk) differs by at most 3.4e-15 and the residuals by 1.5e-11 MW. The production design is built
+  day by day and the walk's in larger batches, so the GAM partial effects are computed on different batch
+  shapes and round differently;
+- both fits start from the same warm start and converge in 87 iterations. The walk-shaped window gives a mean
+  negative log-likelihood of 8.319481775789326, exactly the value archived for EXP-007, and the
+  production-shaped window gives 8.319481775497172. The two likelihoods differ by 3e-10, so the surface is flat
+  and the optimizer stops at points whose log-variance parameters differ by up to 1.4e-4;
+- this moves EXP-007 by at most 0.08 MW on a load of about 50,000 MW, and the aggregate and the intervals by
+  less than 0.05 MW.
+
+It is floating-point noise amplified by a flat likelihood, not leakage and not a different model: the inputs are
+the same to 1e-11 MW and the fit is the same code. I do not pad the batches to imitate the backtest (numerical
+trick without statistical meaning, code that would exist only to match an archive) and I do not change the
+Kalman tolerance (it would alter the frozen EXP-007, D13 and D18). Reproduce the diagnosis with
+`data/production_replay/2024/diag_q4.py` (read only, ignored by git).
 
 ## 3. Real-time versus consolidated consumption
 
