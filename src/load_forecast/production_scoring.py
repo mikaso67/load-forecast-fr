@@ -11,9 +11,10 @@ from sqlalchemy import text
 
 from load_forecast import monitoring
 from load_forecast.cutoff import PARIS, delivery_slots, forecast_cutoff
-from load_forecast.pipeline_artifacts import write_artifact
+from load_forecast.pipeline_artifacts import read_artifact, write_artifact
 from load_forecast.rte_reference import prior_year_hourly_reference
 from load_forecast.serving import ForecastStore, ServingAuthority
+from load_forecast.shadow_a3 import shadow_metrics
 
 LOGGER = logging.getLogger(__name__)
 
@@ -179,6 +180,20 @@ def score_production(store: ForecastStore, authority: ServingAuthority, end: dat
                     reference = actuals_reader(connection, day, day, forecast_cutoff(day)).get(
                         'consolidated', frame.iloc[:0])
                 metrics = day_metrics(day, frame, vintage, served, models, reference)
+                for variant, run_id in ids.items():
+                    path = authority.root.parent / 'runs' / run_id / 'shadow_a3.pkl'
+                    try:
+                        shadow = read_artifact(path)
+                        if (shadow['run_id'] != run_id or shadow['variant'] != variant
+                                or shadow['delivery_day'] != str(day)):
+                            raise ValueError('Shadow identity differs from selected run')
+                        metrics[f'a3_{variant.lower()}'] = shadow_metrics(
+                            day, frame, vintage, shadow, models[variant], served)
+                    except FileNotFoundError:
+                        pass
+                    except Exception as error:
+                        LOGGER.warning('Shadow scoring skipped for %s variant %s: %s',
+                                       day, variant, type(error).__name__)
                 metrics |= {'choice_kind': choice['kind'], 'model_run_ids': ids,
                             'status': 'provisional' if vintage == 'realtime' else 'final'}
                 inputs = [{'time': stamp.isoformat(), 'hash': str(row.payload_hash),

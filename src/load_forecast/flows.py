@@ -1,6 +1,7 @@
 """Native Windows Prefect flows and Paris-time deployments (D17)."""
 
 import argparse
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -13,6 +14,7 @@ from load_forecast.cutoff import PARIS
 from load_forecast.pipeline import make_runtime
 
 _RUNTIME = ContextVar('pipeline_runtime', default=None)
+LOGGER = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -99,8 +101,19 @@ def consolidated_refresh(day: date | None = None, dry_run: bool = False) -> dict
     runtime, target = current_runtime(), delivery_day(day, 0)
     result = runtime.refresh(target)
     runtime.reconcile()
-    return {'collector': result, 'scoring': runtime.score(target),
-            'prune': runtime.prune(target, dry_run=dry_run)}
+    scoring = runtime.score(target)
+    try:
+        pruning = runtime.prune(target, dry_run=dry_run)
+    except Exception as error:
+        event = f'retention_failed:{type(error).__name__}'
+        LOGGER.warning('%s for %s; refresh and scoring succeeded', event, target)
+        pruning = {'status': 'failed', 'error': type(error).__name__}
+        try:
+            runtime.alert(event, target)
+        except Exception as alert_error:
+            LOGGER.error('Could not persist retention incident for %s: %s',
+                         target, type(alert_error).__name__)
+    return {'collector': result, 'scoring': scoring, 'prune': pruning}
 
 
 SCHEDULES = {

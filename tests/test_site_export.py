@@ -921,3 +921,63 @@ def test_javascript_marks_degraded_daily_bars(fixture_db):
                 assert style["borderColor"] == legend["itemStyle"]["borderColor"]
                 assert style["decal"] is not None
     assert "provisional" in rendered["text"]["title-rolling-mae"]
+
+
+@pytest.mark.parametrize(("gain", "model", "expected"), [
+    (-44.0, 144, "44.0 percent higher than RTE's"),
+    (44.0, 56, "44.0 percent lower than RTE's"),
+    (0, 100, "my error equals RTE's"),
+    (None, 144, "44.0 percent higher than RTE's"),
+    (None, 56, "44.0 percent lower than RTE's"),
+])
+def test_site_describes_relative_error_in_both_directions(fixture_db, gain, model, expected):
+    payload = build_site_payload(engine=fixture_db)
+    mae = payload["live_comparisons"]["all_live"]["header_tiles"]["rolling_28d_mae"]
+    mae.update(model_mw=model, rte_mw=100, gap_mw=model - 100, relative_gain_pct=gain)
+    rendered = render_site(payload)
+    assert expected in rendered["text"]["tile-mae-sub"]
+    assert "relative gain" not in rendered["text"]["tile-mae-sub"]
+    assert "-44.0 percent" not in rendered["text"]["tile-mae-sub"]
+
+
+def test_site_labels_week_and_comparison_count_scopes(fixture_db):
+    payload = build_site_payload(engine=fixture_db)
+    rendered = render_site(payload)
+    assert rendered["text"]["title-recent7d"].startswith("Over the last 7 days")
+    assert "paired days" in rendered["text"]["finding-recent7d"]
+    assert "including replay" in rendered["text"]["title-daily-mae"]
+    assert "live days" in rendered["text"]["tile-beating-sub"]
+    clean = render_site(payload, "excluding_degraded")
+    assert "clean live days" in clean["text"]["tile-beating-sub"]
+    payload.pop("live_comparisons")
+    replay = render_site(payload)
+    assert "days including replay" in replay["text"]["tile-beating-sub"]
+
+
+def test_site_places_quality_notice_with_accuracy_and_links_live_results():
+    from html.parser import HTMLParser
+
+    class Sections(HTMLParser):
+        section = None
+        notice_section = None
+        live_link_section = None
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag == "section":
+                self.section = attrs.get("id")
+            if attrs.get("id") == "degraded-inputs":
+                self.notice_section = self.section
+            if tag == "a" and attrs.get("href") == "#accuracy" and self.section == "result":
+                self.live_link_section = self.section
+
+        def handle_endtag(self, tag):
+            if tag == "section":
+                self.section = None
+
+    html = (ROOT / "site/index.html").read_text(encoding="utf-8")
+    parsed = Sections()
+    parsed.feed(html)
+    assert parsed.notice_section == "accuracy"
+    assert parsed.live_link_section == "result"
+    assert "are provisional and currently behind RTE at the season change" in html

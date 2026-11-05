@@ -56,9 +56,15 @@ class MLPoly:
         self.squares += daily ** 2
 
 
+def known_morning(index: pd.DatetimeIndex, day: date) -> np.ndarray:
+    """Mask of the rows of local day D-1 already known at the cutoff of D (D2: start <= 09:30)."""
+    previous = np.asarray(ev.local_dates(index)) == day - timedelta(days=1)
+    return previous & np.asarray(index <= ev.last_usable_slot_start(day))
+
+
 def aggregate(
     forecasts: pd.DataFrame, actual: pd.Series, *, per_slot: bool,
-    update_lag_days: int = UPDATE_LAG_DAYS,
+    update_lag_days: int = UPDATE_LAG_DAYS, morning: bool = False,
 ) -> Aggregation:
     """Aggregate the columns of `forecasts` (UTC slots, one column per expert) day by day.
 
@@ -66,9 +72,14 @@ def aggregate(
     `actual`; nothing later is touched. A round is one local day: with `per_slot`, one round per
     local half-hour slot (both occurrences of a repeated autumn slot add up), otherwise one round
     for the whole day with the regrets of all its slots added up.
+
+    With `morning` (research variant, off in production), day D also absorbs the slots of D-1 known
+    at its cutoff (D2), as their own round; the rest of D-1 is absorbed at D+1.
     """
     if forecasts.isna().any().any():
         raise ValueError('Expert forecasts must be complete: apply the backup chain first')
+    if morning and update_lag_days != UPDATE_LAG_DAYS:
+        raise ValueError('The morning update assumes full days up to D-2')
     days = pd.Series(ev.local_dates(forecasts.index), index=forecasts.index)
     groups = np.asarray(local_slots(forecasts.index)) if per_slot else np.zeros(len(days), int)
     values = forecasts.to_numpy(dtype=float)
@@ -76,14 +87,19 @@ def aggregate(
     rows = {d: np.flatnonzero(days.to_numpy() == d) for d in sorted(set(days))}
     state = MLPoly(N_SLOTS if per_slot else 1, values.shape[1])
     used: dict[date, np.ndarray] = {}
-    absorbed: set[date] = set()
+    done = np.zeros(len(days), dtype=bool)
     output = np.full(len(days), np.nan)
     for day, position in rows.items():
-        for past in rows:
-            if past <= day - timedelta(days=update_lag_days) and past not in absorbed:
-                chosen = rows[past]
-                state.update(groups[chosen], values[chosen], observed[chosen], used[past])
-                absorbed.add(past)
+        for past, chosen in rows.items():
+            if past <= day - timedelta(days=update_lag_days):
+                pick = chosen[~done[chosen]]
+            elif morning and past == day - timedelta(days=1):
+                pick = chosen[~done[chosen] & known_morning(forecasts.index[chosen], day)]
+            else:
+                continue
+            if pick.size:
+                state.update(groups[pick], values[pick], observed[pick], used[past])
+                done[pick] = True
         used[day] = state.weights()
         output[position] = (used[day][groups[position]] * values[position]).sum(axis=1)
     index = pd.MultiIndex.from_tuples(
@@ -92,3 +108,23 @@ def aggregate(
                          columns=forecasts.columns)
     return Aggregation(forecast=pd.Series(output, index=forecasts.index, name=ev.MODEL),
                        weights=table)
+
+
+def morning_level_shift(forecast: pd.Series, actual: pd.Series, shrink: float) -> pd.Series:
+    """Research variant (off in production): shift day D by -shrink times the mean error.
+
+    The error is forecast minus actual over the slots of D-1 known at the cutoff of D (D2), with
+    the forecast issued for D-1 by the same chain. A day without such a slot is not shifted.
+    """
+    if not 0.0 <= shrink <= 1.0:
+        raise ValueError('The shrinkage must lie in [0, 1]')
+    index = forecast.index
+    error = (forecast - actual.reindex(index)).to_numpy(dtype=float)
+    days = np.asarray(ev.local_dates(index))
+    shifted = forecast.to_numpy(dtype=float).copy()
+    for day in sorted(set(days)):
+        known = ((days == day - timedelta(days=1)) & np.asarray(index <= ev.last_usable_slot_start(day))
+                 & np.isfinite(error))
+        if known.any():
+            shifted[days == day] -= shrink * error[known].mean()
+    return pd.Series(shifted, index=index, name=forecast.name)

@@ -385,7 +385,30 @@ class Runtime:
                     archive['result']['flags']['degraded_inputs']), day)
             except Exception:
                 LOGGER.error('Could not persist degraded inputs alert for %s', day)
+        # Publication and state selection have finished before this optional diagnostic starts.
+        try:
+            self.store_shadow(archive, inputs)
+        except Exception as error:
+            event = f'shadow_a3_failed:{type(error).__name__}'
+            LOGGER.warning('%s for %s variant %s', event, day, variant)
+            try:
+                self.alert(event, day)
+            except Exception:
+                LOGGER.error('Could not persist shadow incident for %s', day)
         return {'run_id': run_id, 'variant': variant, 'stale_models': stale}
+
+    def store_shadow(self, archive: dict, inputs: FrozenInputs) -> None:
+        """Store a diagnostic beside its run, with no serving archive or online-state mutation."""
+        from load_forecast.shadow_a3 import build_shadow
+        yesterday = inputs.day - timedelta(days=1)
+        with self.store.engine.connect() as connection:
+            run_id = connection.execute(text('''SELECT run_id FROM forecast.state_runs
+                WHERE delivery_day = :day AND variant = :variant'''),
+                {'day': str(yesterday), 'variant': archive['variant']}).scalar_one_or_none()
+        previous = self.store.replay_run(run_id) if run_id is not None else None
+        shadow = build_shadow(archive, previous, inputs.history, inputs.mapped(archive['variant']),
+                              inputs.realtime, inputs.snapshot_hash)
+        write_artifact(self.root / 'runs' / archive['id'] / 'shadow_a3.pkl', shadow)
 
     def start_tracking(self, start: dict) -> str | None:
         return start_tracking(start)

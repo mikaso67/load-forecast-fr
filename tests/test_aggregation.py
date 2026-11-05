@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from load_forecast import evaluation as ev
-from load_forecast.aggregation import MLPoly, aggregate
+from load_forecast.aggregation import MLPoly, aggregate, known_morning, morning_level_shift
 from load_forecast.cutoff import delivery_slots
 
 
@@ -117,3 +117,86 @@ def test_daylight_saving_days_keep_the_slot_grid():
     autumn = aggregate(forecasts, actual, per_slot=True)
     assert autumn.forecast.notna().all() and len(autumn.forecast) == len(forecasts)
     assert set(autumn.weights.index.get_level_values('group')) == set(range(48))
+
+
+# Research variants (morning of D-1 known at the cutoff, D2): leakage and effect.
+
+def cut_at_d2(actual: pd.Series, target) -> pd.Series:
+    """Every actual published after the cutoff of `target` replaced by NaN (D2 rule)."""
+    cut = actual.copy()
+    cut[cut.index > ev.last_usable_slot_start(target)] = np.nan
+    return cut
+
+
+def test_known_morning_stops_at_0930_paris_on_d_minus_1_also_on_change_days():
+    for first, target in (('2024-03-01', '2024-03-20'), ('2024-03-29', '2024-04-01'),
+                          ('2024-10-24', '2024-10-28'), ('2024-10-24', '2024-10-27')):
+        forecasts, _ = synthetic(first=first, days=6 if first != '2024-03-01' else 24)
+        day = pd.Timestamp(target).date()
+        known = forecasts.index[known_morning(forecasts.index, day)].tz_convert('Europe/Paris')
+        assert known.min().strftime('%H:%M') == '00:00'
+        assert known.max().strftime('%H:%M') == '09:30'
+        assert set(known.date) == {day - pd.Timedelta(days=1)}
+        assert known.max() == pd.Timestamp(ev.last_usable_slot_start(day))
+
+
+@pytest.mark.parametrize('first', ['2024-03-20', '2024-10-20'])
+def test_morning_aggregation_of_day_d_reads_nothing_after_the_d2_slot(first):
+    forecasts, actual = synthetic(first=first, days=16)  # spans a clock change
+    full = aggregate(forecasts, actual, per_slot=False, morning=True).forecast
+    local = pd.Series(ev.local_dates(forecasts.index), index=forecasts.index)
+    for target in sorted(set(local))[2:]:
+        truncated = aggregate(forecasts, cut_at_d2(actual, target), per_slot=False,
+                              morning=True).forecast
+        mask = local == target
+        assert np.array_equal(full[mask], truncated[mask]), target
+
+
+def test_morning_aggregation_reacts_to_the_d_minus_1_morning_and_the_plain_one_does_not():
+    forecasts, actual = synthetic()
+    local = pd.Series(ev.local_dates(forecasts.index), index=forecasts.index)
+    target = sorted(set(local))[10]
+    early = forecasts.index[known_morning(forecasts.index, target)]
+    moved = actual.copy()
+    moved[early] -= 4_000.0
+    mask = local == target
+    plain = [aggregate(forecasts, a, per_slot=False).forecast[mask] for a in (actual, moved)]
+    fast = [aggregate(forecasts, a, per_slot=False, morning=True).forecast[mask]
+            for a in (actual, moved)]
+    assert np.array_equal(plain[0], plain[1])
+    assert not np.allclose(fast[0], fast[1])
+
+
+def test_morning_aggregation_is_off_by_default_and_needs_the_d_minus_2_rule():
+    forecasts, actual = synthetic()
+    assert not np.allclose(aggregate(forecasts, actual, per_slot=False).forecast,
+                           aggregate(forecasts, actual, per_slot=False, morning=True).forecast)
+    with pytest.raises(ValueError, match='D-2'):
+        aggregate(forecasts, actual, per_slot=False, morning=True, update_lag_days=1)
+
+
+def test_level_shift_subtracts_the_shrunk_mean_morning_error_of_d_minus_1():
+    forecasts, actual = synthetic(days=4)
+    local = pd.Series(ev.local_dates(forecasts.index), index=forecasts.index)
+    days = sorted(set(local))
+    forecast = actual + 100.0
+    forecast[local == days[1]] += 300.0  # day 2: morning error 400, afternoon error 400
+    shifted = morning_level_shift(forecast, actual, 0.5)
+    assert np.allclose(shifted[local == days[0]], forecast[local == days[0]])  # no D-1
+    assert np.allclose(shifted[local == days[1]], forecast[local == days[1]] - 50.0)
+    assert np.allclose(shifted[local == days[2]], forecast[local == days[2]] - 200.0)
+    assert np.allclose(morning_level_shift(forecast, actual, 0.0), forecast)
+    with pytest.raises(ValueError, match='shrinkage'):
+        morning_level_shift(forecast, actual, 1.5)
+
+
+@pytest.mark.parametrize('first', ['2024-03-27', '2024-10-23'])
+def test_level_shift_of_day_d_reads_nothing_after_the_d2_slot(first):
+    forecasts, actual = synthetic(first=first, days=8)
+    forecast = forecasts['flat']
+    full = morning_level_shift(forecast, actual, 0.7)
+    local = pd.Series(ev.local_dates(forecasts.index), index=forecasts.index)
+    for target in sorted(set(local))[1:]:
+        truncated = morning_level_shift(forecast, cut_at_d2(actual, target), 0.7)
+        mask = local == target
+        assert np.array_equal(full[mask], truncated[mask]), target

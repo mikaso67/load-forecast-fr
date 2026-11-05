@@ -91,6 +91,7 @@ def prune_artifacts(root: Path, selected: list[dict], now: datetime, *,
     keep_full = {row['run_id'] for row in latest.values() if row} | (protected or set())
     plan: list[tuple[Path, str]] = []
     proofs = {}
+    skipped = {}
     today = now.astimezone(ZoneInfo('Europe/Paris')).date()
     for folder in sorted((root / 'runs').glob('*')):
         if not folder.is_dir() or folder.name in keep_full:
@@ -101,6 +102,8 @@ def prune_artifacts(root: Path, selected: list[dict], now: datetime, *,
             if newest < (now - timedelta(days=28)).timestamp():
                 plan.append((folder, 'unselected run older than 28 days'))
         elif row['day'] < today - timedelta(days=14):
+            if row['variant'] in skipped:
+                continue
             state_path = folder / f"state_{row['day']}.pkl"
             payload = read_artifact(state_path, row['sha256'])
             expected = folder / f"models_{payload['refit']}_{payload['models_identity']}.pkl"
@@ -108,7 +111,20 @@ def prune_artifacts(root: Path, selected: list[dict], now: datetime, *,
                 raw = expected.read_bytes()
                 if hashlib.sha256(raw).hexdigest() != payload['models_sha256']:
                     raise ValueError('Run model hash differs from selected state')
-                source, models = _refit(root, row['variant'], payload['refit'], payload['models_identity'])
+                try:
+                    source, models = _refit(
+                        root, row['variant'], payload['refit'], payload['models_identity'])
+                except FileNotFoundError:
+                    skipped[row['variant']] = {
+                        'variant': row['variant'], 'run_id': row['run_id'],
+                        'day': str(row['day']), 'refit': str(payload['refit']),
+                        'identity': payload['models_identity'], 'reason': 'no_matching_kept_refit'}
+                    LOGGER.warning(
+                        'Skipping model retention for variant %s: run %s day %s refit %s identity %s '
+                        'has no matching kept refit; preserving all selected model copies',
+                        row['variant'], row['run_id'], row['day'],
+                        payload['refit'], payload['models_identity'])
+                    continue
                 signature = model_signature(models)
                 if signature != model_signature(pickle.loads(raw)):
                     raise ValueError('Kept refit prediction parameters differ from selected models')
@@ -117,6 +133,9 @@ def prune_artifacts(root: Path, selected: list[dict], now: datetime, *,
                                      'refit_path': str(source), 'signature': signature,
                                      'refit_sha256': hashlib.sha256(source.read_bytes()).hexdigest()})
                 plan.append((expected, 'duplicate models verified in kept refit'))
+    # A later mismatch also cancels model deletions already planned for that variant.
+    plan = [(path, reason) for path, reason in plan
+            if path.parent.name not in by_run or by_run[path.parent.name]['variant'] not in skipped]
     monday = today - timedelta(days=today.weekday())
     for path in sorted((root / 'inputs').glob('*.pkl')):
         day = date.fromisoformat(path.stem)
@@ -132,4 +151,5 @@ def prune_artifacts(root: Path, selected: list[dict], now: datetime, *,
                 shutil.rmtree(path)
             else:
                 path.unlink()
-    return {'dry_run': dry_run, 'paths': [str(p) for p, _ in plan], 'count': len(plan)}
+    return {'dry_run': dry_run, 'paths': [str(p) for p, _ in plan], 'count': len(plan),
+            'skipped_variants': list(skipped.values())}

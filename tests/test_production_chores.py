@@ -157,6 +157,39 @@ def test_weekly_flow_prunes_after_refresh_and_scoring():
     assert calls == ['refresh', 'reconcile', 'score', ('prune', True)]
 
 
+@pytest.mark.parametrize('alert_fails', [False, True])
+def test_weekly_prune_failure_preserves_refresh_and_score(tmp_path, caplog, alert_fails):
+    runtime = Runtime(tmp_path, SimpleNamespace())
+    runtime.refresh = Mock(return_value={'refreshed': 1})
+    runtime.reconcile = Mock()
+    runtime.score = Mock(return_value={'scores_inserted': 2})
+    runtime.prune = Mock(side_effect=FileNotFoundError('private-error-detail'))
+    if alert_fails:
+        runtime.alert = Mock(side_effect=OSError('private-alert-detail'))
+    with flows.use_runtime(runtime):
+        result = flows.consolidated_refresh.fn(DAY, dry_run=True)
+    assert result == {'collector': {'refreshed': 1}, 'scoring': {'scores_inserted': 2},
+                      'prune': {'status': 'failed', 'error': 'FileNotFoundError'}}
+    runtime.refresh.assert_called_once_with(DAY)
+    runtime.score.assert_called_once_with(DAY)
+    runtime.prune.assert_called_once_with(DAY, dry_run=True)
+    assert 'retention_failed:FileNotFoundError' in caplog.text
+    assert 'private-error-detail' not in caplog.text
+    assert 'private-alert-detail' not in caplog.text
+    if not alert_fails:
+        incident = read_artifact(next((tmp_path / 'incidents').glob('*.pkl')))
+        assert incident['event'] == 'retention_failed:FileNotFoundError'
+
+
+@pytest.mark.parametrize('step', ['refresh', 'reconcile', 'score'])
+def test_weekly_non_retention_failure_still_raises(step):
+    runtime = Mock()
+    getattr(runtime, step).side_effect = RuntimeError('step failed')
+    with flows.use_runtime(runtime), pytest.raises(RuntimeError, match='step failed'):
+        flows.consolidated_refresh.fn(DAY)
+    runtime.prune.assert_not_called()
+
+
 def test_runtime_prune_empty_database_and_input_tree(tmp_path):
     store = local_store(tmp_path)
     runtime = Runtime(tmp_path, store, clock=lambda: datetime(2026, 10, 13, tzinfo=UTC))

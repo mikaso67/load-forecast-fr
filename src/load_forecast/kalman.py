@@ -308,16 +308,22 @@ def walk_forward_kalman(
     history: pd.Series, first: date, last: date, model_factory: Callable[[], Model], *,
     builder: FeatureBuilder, published_at: pd.Series | None = None,
     training_start: date = date(2021, 3, 23), modes: tuple[str, ...] = MODES,
-    final_test: bool = False,
+    final_test: bool = False, morning: bool = False,
 ) -> KalmanResult:
     """Weekly Monday GAM refit, daily filter update with day D-2, one forecast per day.
 
     Every mode shares the same GAMs. The noise and drift variances are re-estimated by maximum
     likelihood at the first weekly refit of each calendar quarter (warm start), on the days whose
     consumption is known at that refit cutoff, and held fixed until the next quarter.
+
+    With `morning` (research variant, off in production), the forecast of D uses a copy of the
+    filter that also absorbs the slots of D-1 known at the cutoff of D (D2). The slot filters are
+    independent, so the other slots are unchanged; the running filter still absorbs full D-2 only.
     """
     if first > last or first <= training_start or last > last_allowed_day(final_test):
         raise ValueError(f'Expected a period after training_start and {locked_message(final_test)}')
+    if morning and UPDATE_LAG_DAYS != 2:
+        raise ValueError('The morning update assumes full days up to D-2')
     if set(modes) - set(MODES):
         raise ValueError(f'Unknown modes: {sorted(set(modes) - set(MODES))}')
     known_history(history, first, published_at)
@@ -362,7 +368,11 @@ def walk_forward_kalman(
             end = window.day_index(target) if target is not None else -1
             for step in range(start, end + 1):
                 absorb_day(state, window, step, known, params)
-            values = corrected_day(window, t, state)
+            used = state
+            if morning and t >= UPDATE_LAG_DAYS:
+                used = KalmanState(state.delta.copy(), state.covariance.copy(), state.last_day)
+                absorb_day(used, window, t - 1, known, params)
+            values = corrected_day(window, t, used)
             frame = plain.copy()
             if not window.index[window.rows[t]].equals(frame.index):
                 raise ValueError('Window rows must match the forecast slots')

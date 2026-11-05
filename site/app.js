@@ -453,11 +453,11 @@
     if (mae) {
       const verdict = mae.model < mae.rte ? "below" : mae.model > mae.rte ? "above" : "equal to";
       setText("title-recent7d",
-        `On ${comparisonDays} days in the last 7 days${pendingDays ? " (provisional)" : " (final)"}, my error was ${verdict} RTE's: ${fmt(mae.model)} MW against ${fmt(mae.rte)} MW`);
+        `Over the last 7 days${pendingDays ? " (provisional)" : " (final)"}, my error was ${verdict} RTE's: ${fmt(mae.model)} MW against ${fmt(mae.rte)} MW`);
     } else {
       setText("title-recent7d", "Last 7 days: awaiting consolidated actuals");
     }
-    setText("finding-recent7d", `${pendingDays} provisional days. ${PROVISIONAL_NOTE}`);
+    setText("finding-recent7d", `${comparisonDays} paired days, ${pendingDays} provisional days. ${PROVISIONAL_NOTE}`);
     const recentGuide = el.parentElement.querySelector(".how-to-read");
     if (recentGuide) recentGuide.textContent = "How to read: the white line shows actual consumption. Shaded areas labelled provisional compare A with real-time actuals; final days compare B with consolidated actuals. The slider zooms in on the week.";
 
@@ -596,7 +596,7 @@
     const scored = items.filter(d => (isFinal(d.actual_vintage) || d.comparison_variant === "A") && d.model_mae !== null && d.rte_mae !== null);
     const better = scored.filter(d => d.model_mae < d.rte_mae).length;
     setText("title-daily-mae", scored.length
-      ? `Below RTE on ${better} of ${scored.length} days in the last 28 days${scored.some(d => isRealtime(d.actual_vintage)) ? " (provisional)" : " (final)"}`
+      ? `Below RTE on ${better} of ${scored.length} days in the last 28 days, including replay${scored.some(d => isRealtime(d.actual_vintage)) ? " (provisional)" : " (final)"}`
       : "Daily errors: awaiting consolidated actuals");
 
     const vintage = vintageSwitch(items, d => d.date, vintageSwitchDate);
@@ -943,14 +943,18 @@
       }
       setText("tile-mae-val", `${fmt(mae.model_mw)} vs ${fmt(mae.rte_mw)} MW`);
       const diff = mae.gap_mw <= 0 ? `${fmt(mae.gap_mw)} MW` : `+${fmt(mae.gap_mw)} MW`;
-      const gainText = gain >= 0 ? `+${gain.toFixed(1)}%` : `${gain.toFixed(1)}%`;
-      setText("tile-mae-sub", `${mae.total_days} days, ${mae.provisional_days} provisional (shadow A). Difference ${diff}, ${gainText} relative gain`);
+      const gainText = gain === 0 ? "my error equals RTE's"
+        : `my error is ${Math.abs(gain).toFixed(1)} percent ${gain > 0 ? "lower" : "higher"} than RTE's`;
+      setText("tile-mae-sub", `${mae.total_days} days, ${mae.provisional_days} provisional (shadow A). Difference ${diff}; ${gainText}`);
     }
 
     const beating = tiles.beating_rte;
     if (beating && beating.pct !== null) {
       setText("tile-beating-val", `${beating.pct}%`);
-      setText("tile-beating-sub", `${beating.better_days} of ${beating.total_days} days, ${beating.provisional_days} provisional (shadow A)`);
+      const scope = comparison.beating_rte
+        ? (document.getElementById("comparison-mode").value === "excluding_degraded" ? "clean live days" : "live days")
+        : "days including replay";
+      setText("tile-beating-sub", `${beating.better_days} of ${beating.total_days} ${scope}, ${beating.provisional_days} provisional (shadow A)`);
     }
 
     const counts = tiles.delivery_counts;

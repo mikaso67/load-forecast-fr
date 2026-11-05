@@ -323,15 +323,57 @@ GAM coefficients, knots, bounds and tail slopes, and LightGBM trees). Fitted-obj
 can differ because of internal caches and object sharing. A small immutable `refit_<identity>.pkl`
 reference beside the state pins its original model hash, the kept refit archive hash and the
 prediction-parameter signature. Loading an older selected state verifies that reference and
-the kept archive before resolving its models. A missing or mismatched refit refuses
-the entire plan before deletion. Unknown file names are kept; unknown input dates fail clearly.
+the kept archive before resolving its models. If no kept refit matches a selected model's variant,
+date and identity, I skip model-copy pruning for that entire variant and log a warning with the
+run, day, refit and identity. This includes initial models inherited from a replay checkpoint
+without a weekly refit archive. The result lists these `skipped_variants`; their selected model
+copies stay in place. Independently verified variants, expired inputs and old unselected runs
+remain eligible. A hash or prediction-parameter mismatch refuses the entire plan before deletion.
+Unknown file names are kept; unknown input dates fail clearly.
 Unselected folders older than 28 days are removed only when no unfinished database run protects
 them. A PostgreSQL advisory transaction lock shared with run completion prevents selected-state
 decisions changing during pruning, without adding UPDATE or DELETE privileges to the application.
 Linked paths and Windows junctions are refused. Checkpoints, their history, serving files,
 incidents, database rows and refit artifacts are never deleted. Current and previous Monday
-inputs stay for D24, alongside the rolling 14-day input window. Pruning failure fails the weekly
-flow visibly and leaves scoring already committed; a rerun safely resumes retention.
+inputs stay for D24, alongside the rolling 14-day input window. Any pruning failure is logged
+and recorded as a local incident, and the weekly result reports `prune.status=failed` with the
+error type. Successful refresh and scoring results stand without retrying collection for a
+retention failure. A rerun safely resumes retention.
+
+### Morning level shadow
+
+I keep the served forecast and all choice rules unchanged. After each completed primary run
+and its publication attempt, I store an unserved A3 point forecast for each variant in
+`runs/<run_id>/shadow_a3.pkl`. It adds -0.3 times the mean morning error (forecast minus actual)
+to that run's aggregate. The error uses the original, uncorrected primary forecast for D-1
+issued on D-2 by the same variant, selected in `forecast.state_runs`, and the frozen D-1 actuals
+from local midnight through 09:30 inclusive. I require every expected UTC morning slot,
+including both autumn occurrences and excluding the nonexistent spring hour. I fill nothing.
+If actuals or the preceding forecast are unavailable, I store a zero shift and the reason.
+
+Variant A uses the real-time actuals. Variant B uses exactly the same frozen D21 mapping as
+its lags. The artifact records each morning timestamp, original forecast, real-time and mapped
+actual, their mean mapped minus real-time gap, the mean error, shift, previous run identity
+and snapshot hash. It does not alter the stored online state or the serving archive. Shadow
+failures are isolated and reported as local incidents after publication. The existing retention
+keeps these small artifacts for selected runs; the runtime backup must include them.
+
+Scoring reads shadows for the selected state runs, only once a complete actual day exists,
+with the same DST completeness check as the served forecast. It appends `a3_a` and `a3_b`
+to `forecast.scores.metrics`, with shadow, original aggregate, served and raw RTE metrics on
+common slots. Actual revisions create new score versions as usual. The existing served
+metrics, monitoring rules and page remain unchanged. Shadows have no calibrated interval.
+Runs before this feature have no shadow and are not reconstructed using later actuals.
+
+Switch rule registered on 2026-11-05, before collecting shadow results: after at least 15
+complete clean live shadow days, the developer reviews daily MAE using A on real-time days
+and B on consolidated days, counting each day once with its latest actual vintage. A clean
+day has a primary served B delivery with no degraded-input flag, and no such flag on the
+selected shadow run. The artifact's `clean_delivery` records its own run's quality; I also
+check the served B archive and choice when counting clean days. I compare with the served forecast
+on the same slots, using the paired metrics stored above. The developer switches to A3 only
+if its mean daily MAE is lower and it wins on at least 60 percent of these days. Otherwise,
+A3 stays a documented backtest result. This code never switches serving automatically.
 
 ## 6. Daily static site publication
 

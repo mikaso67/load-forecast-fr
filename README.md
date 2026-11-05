@@ -1,14 +1,16 @@
 # load-forecast-fr
 
 I forecast French national electricity consumption one day ahead at 30-minute resolution.
-I evaluate every model against RTE's official D-1 forecast on identical timestamps.
+I publish the forecast and daily scores on the [live page](https://mikaso67.github.io/load-forecast-fr/).
 
-## 1. The Question
+On the locked 2025 test year, my model's mean absolute error was **809 MW**, against
+**943 MW** for RTE* (corrected for its prior-year hourly bias) and **1,325 MW for raw RTE D-1**,
+on identical timestamps. Live results are provisional and currently behind RTE at the season
+change; I separate those results from the historical test below.
 
-I forecast French national electricity consumption one day ahead at 30-minute resolution.
-I evaluate whether statistical and machine learning models beat RTE's official D-1 forecast on identical timestamps.
+![Live forecast, accuracy and monitoring page](docs/figures/site_1280px.png)
 
-## 2. Results
+## 1. Results
 
 I evaluate all experiments on the 2024 validation year. Only the two preselected milestone candidates (D18) are evaluated on the locked 2025 test year.
 All metrics are computed on common timestamps where the model, raw RTE D-1, and actual consumption are present.
@@ -17,7 +19,21 @@ Significance is evaluated using paired daily MAE differences with a 7-day moving
 
 ### 2024 Validation Year
 
-Common slots: 17,564 for EXP-001 (excluding two autumn clock-change slots on 2024-10-27 at 00:00 and 00:30 UTC, plus two missing-lag slots on 2024-11-03 at 00:00 and 00:30 UTC); 17,566 for EXP-002 through EXP-013 (two autumn clock-change slots excluded on 2024-10-27 at 00:00 and 00:30 UTC).
+I summarize the main model ladder here; the full table below includes every experiment.
+Each verdict names its comparison. RTE* and raw RTE are benchmarks, not fitted model steps.
+
+| Model / benchmark | MAE (MW) | Verdict |
+|---|---:|---|
+| EXP-001: seasonal naive | 3249.4 | Significantly worse than raw RTE |
+| EXP-003: calendar and forecast temperature | 1719.1 | Significantly better than calendar only; worse than raw RTE |
+| EXP-004: add consumption lags | 1015.7 | Significantly better than EXP-003 and raw RTE; worse than RTE* |
+| EXP-005: smooth temperature with GAMs | 911.9 | Significantly better than EXP-004; not significant vs RTE* |
+| EXP-009: online aggregate | 828.5 | Significantly better than EXP-007; not significant vs RTE* |
+| EXP-014 A3: morning level shift | 802.8 | Significantly better than EXP-009 and RTE*; live shadow only |
+| RTE*: prior-year hourly bias correction | 896.7 | Corrected benchmark |
+| Raw RTE D-1 | 1364.6 | Official forecast as published |
+
+Common slots: 17,564 for EXP-001 (excluding two autumn clock-change slots on 2024-10-27 at 00:00 and 00:30 UTC, plus two missing-lag slots on 2024-11-03 at 00:00 and 00:30 UTC); 17,566 for EXP-002 through EXP-014 (two autumn clock-change slots excluded on 2024-10-27 at 00:00 and 00:30 UTC).
 Benchmarks on 2024: raw RTE D-1 achieves MAE 1364.6 MW (RMSE 1701.6 MW, MAPE 2.73%). RTE* a2 achieves MAE 896.7 MW (RMSE 1171.3 MW, MAPE 1.79%).
 
 | Experiment | Model description | Model MAE (MW) | Model RMSE (MW) | Model MAPE (%) | Difference vs reference (MW) | 7-day 95% Bootstrap CI (MW) | Significance verdict |
@@ -40,6 +56,9 @@ Benchmarks on 2024: raw RTE D-1 achieves MAE 1364.6 MW (RMSE 1701.6 MW, MAPE 2.7
 | [EXP-013](docs/experiments/EXP-013.md) | EXP-005 GAM plus solar radiation and school holiday share | 909.6 | 1284.1 | 1.8% | -1.2 (vs GAM plus solar) | [-16.3, +11.6] | not significant |
 | [EXP-013](docs/experiments/EXP-013.md) | EXP-008 LightGBM plus forecast solar radiation (daily mean) | 1127.6 | 1575.8 | 2.2% | +13.7 (vs EXP-008) | [-27.5, +49.7] | not significant |
 | [EXP-013](docs/experiments/EXP-013.md) | EXP-008 LightGBM plus solar radiation and school holiday share | 1112.9 | 1561.0 | 2.2% | -14.7 (vs LightGBM plus solar) | [-40.6, +15.2] | not significant |
+| [EXP-014](docs/experiments/EXP-014.md) | EXP-009 with ML-Poly also learning from the known D-1 morning | 827.4 | 1206.0 | 1.6% | -1.1 (vs EXP-009) | [-1.8, -0.2] | significant (better, negligible) |
+| [EXP-014](docs/experiments/EXP-014.md) | EXP-009 with the Kalman expert updated on the known D-1 morning | 813.8 | 1194.7 | 1.6% | -14.7 (vs EXP-009) | [-19.6, -8.4] | significant (better) |
+| [EXP-014](docs/experiments/EXP-014.md) | EXP-009 shifted by 0.3 times the mean error of the known D-1 morning | 802.8 | 1179.5 | 1.5% | -25.6 (vs EXP-009) | [-42.6, -5.8] | significant (better) |
 
 Benchmark comparisons on 2024:
 - EXP-004 vs raw RTE: -348.8 MW, 7-day 95% CI [-470.5, -233.2] MW, significant (better); vs RTE*: +119.1 MW, [+28.1, +204.5] MW, significant (worse).
@@ -48,6 +67,7 @@ Benchmark comparisons on 2024:
 - EXP-008 vs raw RTE: -250.5 MW, 7-day 95% CI [-365.5, -139.3] MW, significant (better); vs RTE*: +217.4 MW, [+109.2, +318.8] MW, significant (worse).
 - EXP-009 vs raw RTE: -536.0 MW, 7-day 95% CI [-648.8, -427.1] MW, significant (better); vs RTE*: -68.1 MW, [-152.3, +14.6] MW, not significant on primary 7-day block (14-day check is significant: [-160.3, -12.6] MW).
 - EXP-013 GAM with school holidays vs raw RTE: -453.4 MW, 7-day 95% CI [-574.0, -344.2] MW, significant (better); vs RTE*: +14.5 MW, [-70.9, +90.6] MW, not significant. EXP-013 LightGBM with school holidays vs raw RTE: -255.7 MW, [-367.3, -143.9] MW, significant (better); vs RTE*: +212.2 MW, [+109.1, +311.4] MW, significant (worse).
+- EXP-014 vs RTE*: A1 -69.2 MW, [-152.9, +13.6] MW, not significant; A2 -82.8 MW, [-164.9, -1.7] MW, significant (better); A3 -93.7 MW, [-171.8, -16.7] MW, significant (better). All three significantly better than raw RTE (-537 to -562 MW).
 - EXP-012 interval calibration: overall coverage is 80.1% [76.1, 84.5] with mean width 2641 MW. Seasonal coverages are winter 79.0%, spring 83.6%, summer 81.0%, and autumn 76.9%. Mean absolute distance of the four seasons to 80% is 2.2 points, compared to 9.5 points in EXP-010.
 
 ### 2025 Test Year
@@ -76,7 +96,7 @@ Candidate 1 interval coverage on 2025:
 - By season: winter 82.7%, spring 81.3%, summer 81.6%, autumn 78.9%.
 - By day type: ordinary 83.7% (316 days), cold 71.2% (31 days), holiday 41.9% (11 days).
 
-## 3. Production
+## 2. Production
 
 I freeze inputs at 12:00 Europe/Paris on D-1 and deliver the next day's forecast before
 12:30. A prepared fallback can be served at the deadline without computing a new forecast.
@@ -141,16 +161,17 @@ using observed temperature makes the under-forecast larger. The evidence points 
 models' demand response at heating onset, with only four clean days and several possible
 missing drivers. I keep production settings unchanged rather than retune on one event.
 
-## 4. What I Take From It
+## 3. What I Take From It
 
 I beat raw RTE D-1 significantly with every model that includes consumption lags.
 I beat the leak-free RTE* benchmark on the 2025 test year with the online aggregate (-133.8 MW, significant).
 I find that combining specialized experts (GAM, Kalman, LightGBM) outperforms any single model.
 I achieve near-target 80% interval coverage with seasonal Mondrian conformal prediction, but holidays and cold spells remain under-covered.
 I observe that raw RTE error is dominated by a systematic offset against consolidated data that stale annual corrections cannot track.
-In live production, my model currently trails raw RTE D-1 on the 7 clean days (MAE 905 vs 651 MW), especially at heating onset; this provisional result over a few days tempers the backtest gains (see [Production](#3-production)).
+In live production, my model currently trails raw RTE D-1 on the 7 clean days (MAE 905 vs 651 MW), especially at heating onset; this provisional result over a few days tempers the backtest gains (see [Production](#2-production)).
+EXP-014 A3 reduces backtest MAE by 25.6 MW against EXP-009; its live shadow is running from the 6 November 2026 delivery. I pre-registered the switch rule: at least 15 complete clean days, lower mean daily MAE, and better on at least 60 percent of days, using A on real-time actuals and B on consolidated actuals.
 
-## 5. Data and Sources
+## 4. Data and Sources
 
 I use three data sources:
 
@@ -158,7 +179,7 @@ I use three data sources:
 - NOAA GFS: I ingest numerical weather predictions on a 0.25-degree grid. I download the 00 UTC run of D-1 (forecast steps f021 to f047) through S3 byte-range queries with `src/load_forecast/weather_collector.py`. If that run is late or incomplete, I fall back to the 18 UTC run of D-2. In `src/load_forecast/weather_features.py`, I linearly interpolate hourly forecasts to 30-minute intervals across 12 French grid points. I compute the national mean temperature as an unweighted average of these points.
 - Meteo-France SYNOP: I load daily station observations across the 12 weather points into `labels.synop` with `src/load_forecast/labels.py`. I label a day cold under rule D9 when the national daily mean temperature is strictly below 4.84 degrees Celsius. I require at least 10 valid stations with all 8 synoptic reports. These labels serve only as evaluation ground truth. I never use them as model inputs.
 
-## 6. Method
+## 5. Method
 
 I build an evaluation pipeline following strict protocol rules:
 
@@ -170,7 +191,7 @@ I build an evaluation pipeline following strict protocol rules:
 - Pre-registration: I choose hyperparameters and model designs on 2023 inner walk-forwards only. I commit design choices to Git before running backtests on 2024 or 2025. Two documented exceptions apply: EXP-006 did not commit its 96-hour half-life before the 2024 run, and EXP-010 performed a dry run on 2024 after fixing the window N but before the final run.
 - Moving block bootstrap: I evaluate statistical significance using paired daily MAE differences. I draw 10,000 samples with a 7-day moving block bootstrap. When the 95% interval contains zero, I report the difference as not significant.
 
-## 7. Limits
+## 6. Limits
 
 I identify ten operational and modeling limits documented in `docs/error_analysis.md`, `docs/revision_gap.md`, and `docs/analysis_live_level_shift.md`:
 
@@ -185,7 +206,7 @@ I identify ten operational and modeling limits documented in `docs/error_analysi
 9. Heating onset: The first heating week of October 2026 produced an under-forecast that neither the weekly refit nor GFS temperature error explains. The experts under-reacted to rising demand. I keep settings unchanged on this short episode; any new feature must be chosen on 2023 and evaluated on 2024. See [the analysis](docs/analysis_live_level_shift.md).
 10. Real-time clock-change hour: On 25 October 2026, `eco2mix-national-tr` stamps the repeated hour twice instead of preserving both UTC occurrences. I do not repair it heuristically. That day waits for consolidated actuals before scoring, even though the fallback forecast contains all 50 half-hours.
 
-## 8. Repository Structure
+## 7. Repository Structure
 
 Project structure:
 
@@ -234,71 +255,101 @@ load-forecast-fr/
 \-- requirements.txt     # Pinned Python dependencies
 ```
 
-## 9. How to Run
+## 8. How to Run
 
-Prerequisites (developer-managed):
-- The shared Python 3.13 virtual environment exists at `../load-forecast-fr-venv`.
-- The PostgreSQL 16.4 container is running with databases `load_forecast` and `mlflow` (see `infra/README.md`).
-- The developer provides the root `.env` file with database credentials (`POSTGRES_USER=lff_agent`), loaded with `scripts/load_env.ps1`.
-- Raw table `raw.eco2mix` must already be populated by collectors before dbt models build. Weather tables (`raw.gfs_days`, `raw.gfs_points`) and labels (`labels.synop`) are needed for weather experiments and evaluations, not for dbt itself.
+I use Python 3.13, Docker Desktop with Compose, and PowerShell on Windows. I run these
+commands from the repository root. The local reproduction below creates its own database
+and downloads public consumption data; it does not need an existing model checkpoint.
 
-1. Dependencies and environment:
-   I install pinned dependencies in the shared Python virtual environment:
+1. I create a local environment and install the pinned dependencies:
+
    ```powershell
-   ..\load-forecast-fr-venv\Scripts\pip.exe install -r requirements.txt
+   python -m venv .venv
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+   Copy-Item .env.example .env
    ```
-   I load the developer-provided `.env` and configure the Python path:
+
+   I fill `POSTGRES_USER` and `POSTGRES_PASSWORD` in `.env` with my new local database
+   credentials, keeping `POSTGRES_DB=load_forecast`. I use a database owner for this fresh
+   installation: collection creates raw tables and dbt creates the analytics schema.
+   I keep `.env` untracked and do not overwrite an existing installation's credentials.
+
+2. I start PostgreSQL and MLflow, then load the same settings into PowerShell:
+
    ```powershell
+   docker compose --env-file .env -f infra/docker-compose.infra.yml up -d --wait
    . .\scripts\load_env.ps1
    $env:PYTHONPATH = "src"
    ```
 
-2. Run automated tests and linting:
+   Compose builds the MLflow image on first startup and initializes the `mlflow` database
+   on an empty PostgreSQL volume. PostgreSQL listens on localhost:5432 and MLflow on
+   [localhost:5000](http://127.0.0.1:5000). I keep both services running for the experiment.
+
+3. I collect the definitive consumption and RTE forecasts needed for training and 2024
+   validation. `--end` is exclusive; the collector creates `raw.eco2mix`, retains source
+   versions and deduplicates repeated loads. The download can take time and uses the
+   ODRE API quota, recorded in the database:
+
    ```powershell
-   ..\load-forecast-fr-venv\Scripts\pytest.exe
-   ..\load-forecast-fr-venv\Scripts\ruff.exe check .
+   .\.venv\Scripts\python.exe -m load_forecast.eco2mix --start 2021-03-23 --end 2025-01-01 --dataset eco2mix-national-cons-def
    ```
 
-3. Build clean data models with dbt:
-   I build the `analytics` schema with the production target:
+4. I build the clean half-hourly data into `analytics` with the explicit production target:
+
    ```powershell
-   ..\load-forecast-fr-venv\Scripts\dbt.exe build --project-dir dbt --profiles-dir dbt --target prod
+   .\.venv\Scripts\dbt.exe build --project-dir dbt --profiles-dir dbt --target prod
    ```
 
-4. Run an experiment:
-   I run validation experiments on the 2024 validation period. For a self-contained validation run without cached expert dependencies, I execute the linear calendar benchmark EXP-002:
-   ```powershell
-   ..\load-forecast-fr-venv\Scripts\python.exe scripts/run_exp002.py
-   ```
-   All Python readers, including the API and notebook, use `LFF_CLEAN_TABLE` (default `analytics.load_30min`). I can set it to another `schema.table` before running Python to use an isolated development build. This script logs the run to MLflow.
+   `dbt/profiles.yml` reads the database credentials from the process environment.
+   Python readers use `LFF_CLEAN_TABLE=analytics.load_30min` from `.env.example`.
+   An isolated dbt build can instead use target `dev` and `LFF_DEV_SCHEMA`, with
+   `LFF_CLEAN_TABLE` set to that schema's `load_30min` before running an experiment.
 
-   To reproduce the ML-Poly aggregation EXP-009, I must fulfill two prerequisites:
-   - The runner reads clean data from schema `analytics.load_30min`.
-   - The 2023 burn-in expert cache must exist at `data/experiments/EXP-009/experts_2023.csv`. I generate this cache by running `scripts/select_aggregation.py` (which evaluates the four experts across 2023):
+5. I run the tests and lint checks, then the calendar-only validation experiment:
+
    ```powershell
-   ..\load-forecast-fr-venv\Scripts\python.exe scripts/select_aggregation.py
-   ..\load-forecast-fr-venv\Scripts\python.exe scripts/run_exp009.py
+   .\.venv\Scripts\python.exe -m pytest -q
+   .\.venv\Scripts\python.exe -m ruff check src tests scripts dashboard
+   .\.venv\Scripts\python.exe scripts/run_exp002.py
    ```
 
-   The 2025 test evaluation (`scripts/run_test2025.py`) was executed once under protocol D18 and is locked. The script enforces this no-rerun rule and exits if `docs/experiments/TEST-2025.md` contains results. I report its outcomes as archived historical milestones only.
+   EXP-002 reads the clean consumption and RTE series, fits on expanding history and
+   evaluates 2024. It writes `data/experiments/EXP-002/backtest_predictions.csv` and
+   `results.json` and logs metrics and plots to MLflow using `LFF_AUTHOR`. It needs no
+   cached experts, weather or SYNOP tables; cold-day scoring is not included in this
+   starter run. Weather models and the full evaluation need the additional collectors
+   described in [weather sources](docs/weather_sources.md) and
+   [cold-day labels](docs/temperature_labels.md).
+   I keep the archived 2025 test locked; I do not rerun it as a setup check.
 
-5. Start the production forecast API:
-   The FastAPI service serves stored forecasts produced by the daily pipeline. The API reads from `choices` and `deliveries` tables (or fallback records) in PostgreSQL without recomputing forecasts live. I configure database access with `LFF_DATABASE_URL` (or standard database environment variables):
+6. I prepare production separately, following [Windows operations](docs/operations.md):
+   forecast and scoring SQL tables, an ingestion index, a PostgreSQL `prefect` database,
+   runtime and snapshot directories, a production MLflow experiment, archived weather,
+   and trusted independent A/B warm-start checkpoints. I configure the production keys
+   in `.env` before enabling schedules. The startup script currently resolves Python
+   from `../load-forecast-fr-venv`, so I create that environment for it too:
+
    ```powershell
-   ..\load-forecast-fr-venv\Scripts\uvicorn.exe load_forecast.api.app:app --host 127.0.0.1 --port 8000
-   ```
-   I query health, forecast, and execution run endpoints:
-   - `GET http://127.0.0.1:8000/health`
-   - `GET http://127.0.0.1:8000/forecast/2024-04-15`
-   - `GET http://127.0.0.1:8000/runs/2024-04-15`
-
-6. Start the operational dashboard:
-   The Streamlit dashboard monitors pipeline operations over the last 90 days. It presents served forecasts against actual consumption and RTE D-1 with 80% prediction intervals, daily headline and model MAE scores, operational delivery status (fallbacks and late completions), a two-sided CUSUM drift detection statistic, and recent run history:
-   ```powershell
-   ..\load-forecast-fr-venv\Scripts\streamlit.exe run dashboard/app.py
+   python -m venv ..\load-forecast-fr-venv
+   ..\load-forecast-fr-venv\Scripts\python.exe -m pip install -r requirements.txt
+   .\scripts\start_production.ps1
    ```
 
-## 10. Stack
+   The script checks Docker services and starts or recovers the Prefect server and runner.
+   It registers seven Europe/Paris schedules in `src/load_forecast/flows.py`: consumption
+   every 30 minutes plus 11:55; weather at 05:30 and every 30 minutes from 06:00 to 11:30;
+   fallback preparation at 13:00 for D+2 and 06:00 for D+1; forecasting at 12:00;
+   reconciliation every 10 minutes; scoring and site publication at 08:00; consolidated
+   refresh, rescoring and retention on Monday at 02:00. The noon flow also publishes
+   the site after a serving choice exists. I configure `LFF_SITE_CLONE` and
+   `LFF_REPLAY_DIR` for publication. The script does not register Windows tasks: I install
+   the independent 12:30 deadline task using operations section 3 and arrange the startup
+   script to run at logon and every 15 minutes as a watchdog. I keep the PC awake and
+   logged in. These startup steps enable live collection and forecasting, beyond the
+   historical reproduction above.
+
+## 9. Stack
 
 - Language: Python 3.13
 - Database: PostgreSQL 16.4
@@ -310,3 +361,7 @@ Prerequisites (developer-managed):
 - Dashboard: Streamlit, Matplotlib
 - Testing and Linting: pytest, ruff
 - Infrastructure: Docker, Docker Compose
+
+## 10. License
+
+MIT. See [LICENSE](LICENSE). Data from RTE eCO2mix, NOAA GFS and Meteo-France keep their own terms.

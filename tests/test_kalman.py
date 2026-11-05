@@ -323,3 +323,55 @@ def test_unknown_mode_and_bad_period_are_refused():
         run(history, temperature, date(2024, 3, 20), date(2024, 3, 20), modes=('none',))
     with pytest.raises(ValueError, match='after training_start'):
         run(history, temperature, date(2025, 1, 2), date(2025, 1, 3))
+
+
+# Research variant: the D-1 slots known at the cutoff (D2) update their own slot filter one day earlier.
+
+def morning_slots(day: date) -> np.ndarray:
+    """Local slots of D whose occurrence on D-1 starts at or before the D2 slot (09:30 Paris)."""
+    return np.asarray(local_slots(slots_of(day))) <= 19
+
+
+def test_morning_filter_changes_only_the_slots_known_on_d_minus_1():
+    temperature, history = setup()
+    day = date(2024, 3, 20)
+    plain = run(history, temperature, day, day, modes=('restart',)).corrected['restart']
+    fast = run(history, temperature, day, day, modes=('restart',), morning=True).corrected['restart']
+    early = morning_slots(day)
+    np.testing.assert_array_equal(plain.loc[~early, ev.MODEL], fast.loc[~early, ev.MODEL])
+    assert not np.allclose(plain.loc[early, ev.MODEL], fast.loc[early, ev.MODEL])
+
+
+def test_morning_filter_of_day_d_reads_nothing_after_the_d2_slot():
+    temperature, history = setup()
+    for day in (date(2024, 3, 20), date(2024, 3, 25)):  # 03-25 is a refit Monday
+        boundary = ev.last_usable_slot_start(day)
+        base = run(history, temperature, day, day, modes=('keep',), morning=True).corrected['keep']
+        late = history.copy()
+        late.loc[late.index > boundary] += 5000.0
+        moved = run(late, temperature, day, day, modes=('keep',), morning=True).corrected['keep']
+        pd.testing.assert_frame_equal(base, moved)
+        shortened = run(history.loc[history.index <= boundary], temperature, day, day,
+                        modes=('keep',), morning=True).corrected['keep']
+        pd.testing.assert_frame_equal(base, shortened)
+
+
+def test_morning_filter_reacts_to_the_known_d_minus_1_slots():
+    temperature, history = setup()
+    day = date(2024, 3, 20)
+    boundary = ev.last_usable_slot_start(day)
+    early_d1 = history.loc[(history.index >= slots_of(day - timedelta(days=1))[0])
+                           & (history.index <= boundary)].index
+    damaged = history.copy()
+    damaged.loc[early_d1] += 5000.0
+    base = run(history, temperature, day, day, modes=('keep',), morning=True).corrected['keep']
+    moved = run(damaged, temperature, day, day, modes=('keep',), morning=True).corrected['keep']
+    early = morning_slots(day)
+    assert not np.allclose(base.loc[early, ev.MODEL], moved.loc[early, ev.MODEL])
+
+
+def test_morning_filter_refuses_a_d_minus_1_lag(monkeypatch):
+    temperature, history = setup()
+    monkeypatch.setattr(kalman, 'UPDATE_LAG_DAYS', 1)
+    with pytest.raises(ValueError, match='D-2'):
+        run(history, temperature, date(2024, 3, 20), date(2024, 3, 20), morning=True)

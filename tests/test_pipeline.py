@@ -465,6 +465,7 @@ def test_incident_archive_flag_and_alert_preserve_primary(
     runtime.load_state = Mock(return_value=state)
     runtime.choose_models = Mock(return_value=False)
     monkeypatch.setattr(pipeline.production, 'forecast_production_day', lambda *a, **k: output)
+    runtime.store_shadow = Mock()
     artifact = tmp_path / 'state.pkl'
     artifact.write_bytes(b'frozen')
     monkeypatch.setattr(pipeline.production, 'StateStore', lambda p: SimpleNamespace(save=lambda s: artifact))
@@ -481,6 +482,7 @@ def test_incident_archive_flag_and_alert_preserve_primary(
     runtime.forecast(day, 'B')
     assert calls == ['publish', 'alert']
     saved = runtime.store.complete_run.call_args.args[0]
+    runtime.store_shadow.assert_called_once_with(saved, inputs)
     assert saved['values'] == archive['values']
     runtime.store.fail_run.assert_not_called()
     assert saved['result']['flags']['degraded_inputs'] == reasons

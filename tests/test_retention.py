@@ -80,13 +80,46 @@ def test_prune_dry_run_real_run_and_resume(tmp_path):
     assert prune_artifacts(tmp_path, rows, NOW, protected={'active'}, dry_run=False)['count'] == 0
 
 
-def test_no_kept_refit_refuses_all_deletions(tmp_path):
+@pytest.mark.parametrize('dry_run', [True, False])
+@pytest.mark.parametrize('mismatch', ['missing', 'identity', 'variant', 'date'])
+def test_unmatched_refit_skips_whole_variant(tmp_path, caplog, dry_run, mismatch):
+    rows = [selected_run(tmp_path, 'a_verified', date(2026, 9, 1)),
+            selected_run(tmp_path, 'z_unmatched', date(2026, 9, 2),
+                         keep_refit=mismatch != 'missing'),
+            selected_run(tmp_path, 'latest_b', date(2026, 10, 12)),
+            selected_run(tmp_path, 'old_a', date(2026, 9, 1), 'A'),
+            selected_run(tmp_path, 'latest_a', date(2026, 10, 12), 'A')]
+    if mismatch != 'missing':
+        path = tmp_path / 'refit_attempts/model_z_unmatched.pkl'
+        prepared = read_artifact(path)
+        if mismatch == 'identity':
+            prepared.models.identity = 'other'
+        elif mismatch == 'variant':
+            prepared = replace(prepared, variant='A')
+        else:
+            prepared.models.refit = date(2026, 8, 24)
+        path.write_bytes(pickle.dumps(prepared))
+    preserved = {p: p.read_bytes() for name in ('a_verified', 'z_unmatched', 'latest_b')
+                 for p in (tmp_path / 'runs' / name).glob('*')}
+    result = prune_artifacts(tmp_path, rows, NOW, dry_run=dry_run)
+    assert result['count'] == 1
+    assert result['skipped_variants'] == [{
+        'variant': 'B', 'run_id': 'z_unmatched', 'day': '2026-09-02',
+        'refit': '2026-08-31', 'identity': 'model_z_unmatched',
+        'reason': 'no_matching_kept_refit'}]
+    assert all(p.read_bytes() == raw for p, raw in preserved.items())
+    assert bool(list((tmp_path / 'runs/old_a').glob('models_*.pkl'))) == dry_run
+    assert 'Skipping model retention for variant B' in caplog.text
+    assert 'model_z_unmatched' in caplog.text
+
+
+def test_no_kept_refit_preserves_unmatched_models(tmp_path):
     rows = [selected_run(tmp_path, 'old', date(2026, 9, 1), keep_refit=False),
             selected_run(tmp_path, 'latest', date(2026, 10, 12))]
     duplicate = old_folder(tmp_path, 'duplicate')
-    with pytest.raises(FileNotFoundError, match='No kept refit'):
-        prune_artifacts(tmp_path, rows, NOW, dry_run=False)
-    assert duplicate.exists()
+    result = prune_artifacts(tmp_path, rows, NOW, dry_run=False)
+    assert result['skipped_variants'][0]['variant'] == 'B'
+    assert not duplicate.exists()
     assert list((tmp_path / 'runs/old').glob('models_*.pkl'))
 
 
